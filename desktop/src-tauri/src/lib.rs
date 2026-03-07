@@ -1,13 +1,14 @@
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use agent_top_core::{spawn_codex_run, Event, EventKind, RunSettings};
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager, State};
+use tauri_plugin_dialog::DialogExt;
 
 struct AppState {
   default_workspace: String,
-  running: Arc<Mutex<bool>>,
+  next_session_id: AtomicU64,
 }
 
 #[derive(Serialize)]
@@ -32,10 +33,16 @@ struct RunRequest {
 
 #[derive(Clone, Serialize)]
 struct EventPayload {
+  session_id: String,
   timestamp: String,
   kind: String,
   message: String,
   finished: bool,
+}
+
+#[derive(Serialize)]
+struct StartRunResponse {
+  session_id: String,
 }
 
 #[tauri::command]
@@ -47,26 +54,25 @@ fn bootstrap(state: State<'_, AppState>) -> BootstrapPayload {
 }
 
 #[tauri::command]
+fn pick_workspace(app: AppHandle) -> Option<String> {
+  app
+    .dialog()
+    .file()
+    .blocking_pick_folder()
+    .map(|path| path.to_string())
+}
+
+#[tauri::command]
 fn start_run(
   app: AppHandle,
   state: State<'_, AppState>,
   request: RunRequest,
-) -> Result<(), String> {
+) -> Result<StartRunResponse, String> {
   if request.prompt.trim().is_empty() {
     return Err("prompt cannot be empty".to_string());
   }
 
-  let mut running = state
-    .running
-    .lock()
-    .map_err(|_| "failed to lock run state".to_string())?;
-
-  if *running {
-    return Err("a run is already active".to_string());
-  }
-
-  *running = true;
-  drop(running);
+  let session_id = format!("run-{}", state.next_session_id.fetch_add(1, Ordering::Relaxed));
 
   let receiver = spawn_codex_run(
     request.prompt,
@@ -78,20 +84,20 @@ fn start_run(
     },
   );
 
-  let running = state.running.clone();
+  let emitted_session_id = session_id.clone();
   std::thread::spawn(move || {
     while let Ok(update) = receiver.recv() {
-      let _ = app.emit("agent-event", EventPayload::from_event(update.event, update.finished));
+      let _ = app.emit(
+        "agent-event",
+        EventPayload::from_event(emitted_session_id.clone(), update.event, update.finished),
+      );
       if update.finished {
-        if let Ok(mut flag) = running.lock() {
-          *flag = false;
-        }
         break;
       }
     }
   });
 
-  Ok(())
+  Ok(StartRunResponse { session_id })
 }
 
 impl Default for SettingsPayload {
@@ -105,8 +111,9 @@ impl Default for SettingsPayload {
 }
 
 impl EventPayload {
-  fn from_event(event: Event, finished: bool) -> Self {
+  fn from_event(session_id: String, event: Event, finished: bool) -> Self {
     Self {
+      session_id,
       timestamp: event.timestamp,
       kind: match event.kind {
         EventKind::Status => "status",
@@ -144,7 +151,7 @@ pub fn run() {
     .setup(|app| {
       app.manage(AppState {
         default_workspace: detect_workspace(),
-        running: Arc::new(Mutex::new(false)),
+        next_session_id: AtomicU64::new(1),
       });
 
       if cfg!(debug_assertions) {
@@ -154,9 +161,10 @@ pub fn run() {
             .build(),
         )?;
       }
+      app.handle().plugin(tauri_plugin_dialog::init())?;
       Ok(())
     })
-    .invoke_handler(tauri::generate_handler![bootstrap, start_run])
+    .invoke_handler(tauri::generate_handler![bootstrap, pick_workspace, start_run])
     .run(tauri::generate_context!())
     .expect("error while running tauri application");
 }
