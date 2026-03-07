@@ -244,6 +244,12 @@ h1 {
   align-items: start;
 }
 
+.session-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
 .session-id {
   display: inline-block;
   margin-bottom: 8px;
@@ -263,9 +269,14 @@ h1 {
 
 .session-workspace,
 .session-prompt,
-.session-metrics {
+.session-metrics,
+.session-latest {
   margin-top: 10px;
   color: #b8c0cd;
+}
+
+.session-latest {
+  color: #f0f2f7;
 }
 
 .session-workspace,
@@ -284,6 +295,18 @@ h1 {
   padding: 0;
   max-height: 260px;
   overflow: auto;
+}
+
+.session-details.is-collapsed {
+  display: none;
+}
+
+.toggle-button {
+  border-radius: 999px;
+  padding: 8px 12px;
+  background: rgba(255, 255, 255, 0.06);
+  color: #f6f4ef;
+  cursor: pointer;
 }
 
 .event-item {

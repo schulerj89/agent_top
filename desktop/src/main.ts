@@ -33,13 +33,18 @@ type SessionState = {
   workspace: string;
   status: string;
   running: boolean;
+  expanded: boolean;
   events: number;
   commands: number;
   warnings: number;
+  latestMessage: string;
   eventsElement: HTMLUListElement;
   statusElement: HTMLElement;
   metricsElement: HTMLElement;
   cardElement: HTMLElement;
+  latestElement: HTMLElement;
+  detailsElement: HTMLElement;
+  toggleButton: HTMLButtonElement;
 };
 
 const app = document.querySelector<HTMLDivElement>("#app");
@@ -186,17 +191,31 @@ function createSessionCard(sessionId: string, prompt: string, workspace: string)
         <span class="session-id">${sessionId}</span>
         <h3>${prompt === "/status" ? "/status" : "Prompt Run"}</h3>
       </div>
-      <span class="session-status">Launching</span>
+      <div class="session-header-actions">
+        <span class="session-status">Launching</span>
+        <button class="toggle-button" type="button">Expand</button>
+      </div>
     </header>
     <p class="session-workspace"></p>
     <p class="session-prompt"></p>
-    <div class="session-metrics">0 events · 0 commands · 0 warnings</div>
-    <ul class="session-events"></ul>
+    <p class="session-latest">Latest: waiting for first event</p>
+    <div class="session-metrics">0 events - 0 commands - 0 warnings</div>
+    <div class="session-details is-collapsed">
+      <ul class="session-events"></ul>
+    </div>
   `;
 
   card.querySelector<HTMLElement>(".session-workspace")!.textContent = workspace;
   card.querySelector<HTMLElement>(".session-prompt")!.textContent = prompt;
   sessionList.prepend(card);
+
+  const detailsElement = card.querySelector<HTMLElement>(".session-details")!;
+  const toggleButton = card.querySelector<HTMLButtonElement>(".toggle-button")!;
+  toggleButton.addEventListener("click", () => {
+    const nextExpanded = detailsElement.classList.contains("is-collapsed");
+    detailsElement.classList.toggle("is-collapsed", !nextExpanded);
+    toggleButton.textContent = nextExpanded ? "Collapse" : "Expand";
+  });
 
   return {
     id: sessionId,
@@ -204,19 +223,25 @@ function createSessionCard(sessionId: string, prompt: string, workspace: string)
     workspace,
     status: "Launching",
     running: true,
+    expanded: false,
     events: 0,
     commands: 0,
     warnings: 0,
+    latestMessage: "waiting for first event",
     eventsElement: card.querySelector<HTMLUListElement>(".session-events")!,
     statusElement: card.querySelector<HTMLElement>(".session-status")!,
     metricsElement: card.querySelector<HTMLElement>(".session-metrics")!,
     cardElement: card,
+    latestElement: card.querySelector<HTMLElement>(".session-latest")!,
+    detailsElement,
+    toggleButton,
   };
 }
 
 function updateSessionSummary(session: SessionState) {
   session.statusElement.textContent = session.status;
-  session.metricsElement.textContent = `${session.events} events · ${session.commands} commands · ${session.warnings} warnings`;
+  session.metricsElement.textContent = `${session.events} events - ${session.commands} commands - ${session.warnings} warnings`;
+  session.latestElement.textContent = `Latest: ${session.latestMessage}`;
   session.cardElement.dataset.state = session.running ? "running" : "finished";
 }
 
@@ -237,6 +262,7 @@ function appendSessionEvent(event: AgentEvent) {
 
   globalEventTotal += 1;
   session.status = event.finished ? "Completed" : event.kind === "status" ? event.message : "Running";
+  session.latestMessage = event.message;
 
   const item = document.createElement("li");
   item.className = `event-item kind-${event.kind}`;
@@ -251,6 +277,8 @@ function appendSessionEvent(event: AgentEvent) {
   if (event.finished && session.running) {
     session.running = false;
     runningCount = Math.max(0, runningCount - 1);
+    session.detailsElement.classList.add("is-collapsed");
+    session.toggleButton.textContent = "Expand";
   }
 
   updateSessionSummary(session);

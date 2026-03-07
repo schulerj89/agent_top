@@ -176,6 +176,15 @@ pub fn spawn_codex_run(prompt: String, workspace: String, settings: RunSettings)
         let executable = if cfg!(windows) { "codex.cmd" } else { "codex" };
         let mut command = Command::new(executable);
 
+        if !settings.approval.trim().is_empty() {
+            command.arg("--ask-for-approval").arg(settings.approval.as_str());
+        }
+
+        command
+            .arg("exec")
+            .arg("--json")
+            .arg("--skip-git-repo-check");
+
         if !settings.model.trim().is_empty() {
             command.arg("--model").arg(settings.model.as_str());
         }
@@ -184,14 +193,7 @@ pub fn spawn_codex_run(prompt: String, workspace: String, settings: RunSettings)
             command.arg("--sandbox").arg(settings.sandbox.as_str());
         }
 
-        if !settings.approval.trim().is_empty() {
-            command.arg("--ask-for-approval").arg(settings.approval.as_str());
-        }
-
         let mut child = match command
-            .arg("exec")
-            .arg("--json")
-            .arg("--skip-git-repo-check")
             .arg("-C")
             .arg(workspace.as_str())
             .arg(prompt.as_str())
