@@ -11,11 +11,16 @@ Current scope:
 - Load a plain-text event log
 - Track session status, command counts, files touched, and recent events
 - Render a simple terminal dashboard
+- Run `codex exec --json` and stream a live dashboard in the terminal
 
 Example use:
 
 ```powershell
-cargo run -- sample\session.log
+cargo run -- replay sample\session.log
+```
+
+```powershell
+cargo run -- run "Reply with the single word ready"
 ```
 
 ## Phase 2: Medium
@@ -54,3 +59,7 @@ Supported kinds:
 - `note`
 
 See [sample/session.log](/C:/Users/joshs/Projects/agent_top/sample/session.log) for a working example.
+
+## Codex integration
+
+`agent_top run ...` starts a local `codex exec --json` process, listens to JSONL events, and redraws a lightweight terminal dashboard as events arrive.
