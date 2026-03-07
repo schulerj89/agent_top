@@ -180,7 +180,11 @@ fn run_codex(prompt: &str) {
 
     let mut terminal = init_terminal();
     let mut summary = Summary::with_source("live codex session");
-    let receiver = spawn_codex_run(prompt.to_string(), workspace.to_string_lossy().into_owned());
+    let receiver = spawn_codex_run(
+        prompt.to_string(),
+        workspace.to_string_lossy().into_owned(),
+        RunSettings::default(),
+    );
 
     render_dashboard(&mut terminal, &summary);
     drain_runner_events(&receiver, &mut terminal, &mut summary);
@@ -228,6 +232,7 @@ fn run_app() {
             match app.mode {
                 AppMode::Ready => handle_ready_key(&mut app, key.code),
                 AppMode::EditingPrompt => handle_prompt_key(&mut app, key.code),
+                AppMode::EditingSettings => handle_settings_key(&mut app, key.code),
                 AppMode::Running => handle_running_key(&mut app, key.code),
             }
         }
@@ -415,20 +420,32 @@ fn drain_runner_events(
     }
 }
 
-fn spawn_codex_run(prompt: String, workspace: String) -> Receiver<RunnerUpdate> {
+fn spawn_codex_run(prompt: String, workspace: String, settings: RunSettings) -> Receiver<RunnerUpdate> {
     let (sender, receiver) = mpsc::channel();
 
     thread::spawn(move || {
         let executable = if cfg!(windows) { "codex.cmd" } else { "codex" };
-        let mut child = match Command::new(executable)
-            .args([
-                "exec",
-                "--json",
-                "--skip-git-repo-check",
-                "-C",
-                workspace.as_str(),
-                prompt.as_str(),
-            ])
+        let mut command = Command::new(executable);
+
+        if !settings.model.trim().is_empty() {
+            command.arg("--model").arg(settings.model.as_str());
+        }
+
+        if !settings.sandbox.trim().is_empty() {
+            command.arg("--sandbox").arg(settings.sandbox.as_str());
+        }
+
+        if !settings.approval.trim().is_empty() {
+            command.arg("--ask-for-approval").arg(settings.approval.as_str());
+        }
+
+        let mut child = match command
+            .arg("exec")
+            .arg("--json")
+            .arg("--skip-git-repo-check")
+            .arg("-C")
+            .arg(workspace.as_str())
+            .arg(prompt.as_str())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()
@@ -711,6 +728,8 @@ struct AppTerminal {
 struct App {
     mode: AppMode,
     prompt_input: String,
+    settings: RunSettings,
+    settings_field: SettingsField,
     summary: Summary,
     receiver: Option<Receiver<RunnerUpdate>>,
     workspace: String,
@@ -722,6 +741,8 @@ impl App {
         Self {
             mode: AppMode::Ready,
             prompt_input: String::new(),
+            settings: RunSettings::default(),
+            settings_field: SettingsField::Model,
             summary: Summary::with_source("idle"),
             receiver: None,
             workspace,
@@ -737,17 +758,65 @@ impl App {
 
         self.summary = Summary::with_source("live codex session");
         self.summary.record(Event::new("app", EventKind::Status, "launching codex run"));
-        self.receiver = Some(spawn_codex_run(prompt, self.workspace.clone()));
+        self.receiver = Some(spawn_codex_run(
+            prompt,
+            self.workspace.clone(),
+            self.settings.clone(),
+        ));
         self.mode = AppMode::Running;
         self.prompt_input.clear();
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Eq, PartialEq)]
 enum AppMode {
     Ready,
     EditingPrompt,
+    EditingSettings,
     Running,
+}
+
+#[derive(Clone)]
+struct RunSettings {
+    model: String,
+    sandbox: String,
+    approval: String,
+}
+
+impl Default for RunSettings {
+    fn default() -> Self {
+        Self {
+            model: String::new(),
+            sandbox: "workspace-write".to_string(),
+            approval: "never".to_string(),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum SettingsField {
+    Model,
+    Sandbox,
+    Approval,
+}
+
+impl SettingsField {
+    fn next(self) -> Self {
+        match self {
+            Self::Model => Self::Sandbox,
+            Self::Sandbox => Self::Approval,
+            Self::Approval => Self::Model,
+        }
+    }
+
+    fn previous(self) -> Self {
+        match self {
+            Self::Model => Self::Approval,
+            Self::Sandbox => Self::Model,
+            Self::Approval => Self::Sandbox,
+        }
+    }
+
 }
 
 struct RunnerUpdate {
@@ -774,6 +843,7 @@ impl RunnerUpdate {
 fn handle_ready_key(app: &mut App, key: KeyCode) {
     match key {
         KeyCode::Char('n') => app.mode = AppMode::EditingPrompt,
+        KeyCode::Char('s') => app.mode = AppMode::EditingSettings,
         KeyCode::Char('q') => app.should_quit = true,
         _ => {}
     }
@@ -792,6 +862,21 @@ fn handle_prompt_key(app: &mut App, key: KeyCode) {
     }
 }
 
+fn handle_settings_key(app: &mut App, key: KeyCode) {
+    match key {
+        KeyCode::Esc => app.mode = AppMode::Ready,
+        KeyCode::Up => app.settings_field = app.settings_field.previous(),
+        KeyCode::Down => app.settings_field = app.settings_field.next(),
+        KeyCode::Tab => app.settings_field = app.settings_field.next(),
+        KeyCode::BackTab => app.settings_field = app.settings_field.previous(),
+        KeyCode::Backspace => {
+            selected_setting_mut(&mut app.settings, app.settings_field).pop();
+        }
+        KeyCode::Char(ch) => selected_setting_mut(&mut app.settings, app.settings_field).push(ch),
+        _ => {}
+    }
+}
+
 fn handle_running_key(app: &mut App, key: KeyCode) {
     if let KeyCode::Char('q') = key {
         app.summary
@@ -805,7 +890,7 @@ fn render_app(terminal: &mut AppTerminal, app: &App) {
             .direction(Direction::Vertical)
             .constraints([
                 Constraint::Length(7),
-                Constraint::Length(7),
+                Constraint::Length(9),
                 Constraint::Min(8),
                 Constraint::Length(5),
             ])
@@ -816,6 +901,11 @@ fn render_app(terminal: &mut AppTerminal, app: &App) {
             .constraints([Constraint::Percentage(55), Constraint::Percentage(45)])
             .split(vertical[0]);
 
+        let controls = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+            .split(vertical[1]);
+
         let middle = Layout::default()
             .direction(Direction::Horizontal)
             .constraints([Constraint::Percentage(35), Constraint::Percentage(65)])
@@ -823,7 +913,8 @@ fn render_app(terminal: &mut AppTerminal, app: &App) {
 
         frame.render_widget(render_overview(&app.summary), top[0]);
         frame.render_widget(render_metrics(&app.summary), top[1]);
-        frame.render_widget(render_launcher(app), vertical[1]);
+        frame.render_widget(render_launcher(app), controls[0]);
+        frame.render_widget(render_settings(app), controls[1]);
         frame.render_widget(render_files(&app.summary), middle[0]);
         frame.render_widget(render_events(&app.summary), middle[1]);
         frame.render_widget(render_help(app), vertical[3]);
@@ -834,6 +925,7 @@ fn render_launcher(app: &App) -> Paragraph<'static> {
     let title = match app.mode {
         AppMode::Ready => "Launcher",
         AppMode::EditingPrompt => "New Run",
+        AppMode::EditingSettings => "Launcher",
         AppMode::Running => "Run In Progress",
     };
 
@@ -841,7 +933,7 @@ fn render_launcher(app: &App) -> Paragraph<'static> {
         AppMode::Ready => vec![
             Line::from("Press n to start a new Codex run."),
             Line::from(format!("Workspace: {}", app.workspace)),
-            Line::from("Settings panel is next; prompt entry is live now."),
+            Line::from("Press s to edit settings."),
         ],
         AppMode::EditingPrompt => vec![
             Line::from("Type a prompt and press Enter to launch Codex."),
@@ -850,6 +942,11 @@ fn render_launcher(app: &App) -> Paragraph<'static> {
                 Span::raw(app.prompt_input.clone()),
             ]),
             Line::from("Esc cancels."),
+        ],
+        AppMode::EditingSettings => vec![
+            Line::from("Edit settings in the panel to the right."),
+            Line::from("Up/Down switch fields."),
+            Line::from("Esc returns to the home screen."),
         ],
         AppMode::Running => vec![
             Line::from("Codex is running in the background."),
@@ -863,16 +960,77 @@ fn render_launcher(app: &App) -> Paragraph<'static> {
         .wrap(Wrap { trim: true })
 }
 
+fn render_settings(app: &App) -> Paragraph<'static> {
+    let fields = vec![
+        settings_line("Model", &app.settings.model, app.settings_field, SettingsField::Model, app.mode),
+        settings_line(
+            "Sandbox",
+            &app.settings.sandbox,
+            app.settings_field,
+            SettingsField::Sandbox,
+            app.mode,
+        ),
+        settings_line(
+            "Approval",
+            &app.settings.approval,
+            app.settings_field,
+            SettingsField::Approval,
+            app.mode,
+        ),
+    ];
+
+    Paragraph::new(fields)
+        .block(Block::default().title("Settings").borders(Borders::ALL))
+        .wrap(Wrap { trim: true })
+}
+
+fn settings_line(
+    label: &str,
+    value: &str,
+    selected: SettingsField,
+    field: SettingsField,
+    mode: AppMode,
+) -> Line<'static> {
+    let is_selected = mode == AppMode::EditingSettings && selected == field;
+    let label_style = if is_selected {
+        Style::default().fg(Color::Black).bg(Color::Cyan).add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(Color::Gray).add_modifier(Modifier::BOLD)
+    };
+
+    let shown = if value.trim().is_empty() { "(default)" } else { value };
+    let value_style = if is_selected {
+        Style::default().fg(Color::Cyan)
+    } else {
+        Style::default().fg(Color::White)
+    };
+
+    Line::from(vec![
+        Span::styled(format!("{label:<8}"), label_style),
+        Span::raw(" "),
+        Span::styled(shown.to_string(), value_style),
+    ])
+}
+
 fn render_help(app: &App) -> Paragraph<'static> {
     let line = match app.mode {
-        AppMode::Ready => "n new run | q quit | Ctrl+C force exit",
+        AppMode::Ready => "n new run | s settings | q quit | Ctrl+C force exit",
         AppMode::EditingPrompt => "Enter launch run | Esc cancel | Backspace edit",
+        AppMode::EditingSettings => "Up/Down choose field | type edit | Esc close",
         AppMode::Running => "Ctrl+C exit app | q disabled during active run",
     };
 
     Paragraph::new(vec![Line::from(line)])
         .block(Block::default().title("Controls").borders(Borders::ALL))
         .wrap(Wrap { trim: true })
+}
+
+fn selected_setting_mut(settings: &mut RunSettings, field: SettingsField) -> &mut String {
+    match field {
+        SettingsField::Model => &mut settings.model,
+        SettingsField::Sandbox => &mut settings.sandbox,
+        SettingsField::Approval => &mut settings.approval,
+    }
 }
 
 impl Drop for AppTerminal {

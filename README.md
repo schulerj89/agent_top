@@ -22,6 +22,7 @@ cargo run --
 Inside the app:
 
 - Press `n` to enter a prompt
+- Press `s` to edit settings
 - Press `Enter` to launch a Codex run
 - Press `q` to quit from the home screen
 
@@ -73,3 +74,9 @@ See [sample/session.log](/C:/Users/joshs/Projects/agent_top/sample/session.log) 
 ## Codex integration
 
 `agent_top run ...` starts a local `codex exec --json` process, listens to JSONL events, and redraws a real terminal UI as events arrive.
+
+Current in-app settings:
+
+- `model`
+- `sandbox`
+- `approval`
