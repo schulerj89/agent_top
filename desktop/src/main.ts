@@ -48,7 +48,7 @@ app.innerHTML = `
       <div class="rail-header">
         <div class="rail-brand">
           <p class="eyebrow">Desktop Monitor</p>
-          <h1 class="rail-title">agent_top</h1>
+          <h1 class="rail-title">Agent Top</h1>
         </div>
         <button id="sidebarToggleButton" class="ghost rail-toggle" type="button" aria-label="Toggle sidebar">Collapse</button>
       </div>
@@ -74,7 +74,7 @@ app.innerHTML = `
       <section class="hero">
         <div>
           <p class="eyebrow">Session Workspace</p>
-          <h1>agent_top</h1>
+          <h1>Agent Top</h1>
           <p class="summary">Use the left rail like a real session navigator: collapse it when you want more room, expand it when you want context, and keep the selected session as the primary workspace.</p>
         </div>
         <div class="hero-meta">
