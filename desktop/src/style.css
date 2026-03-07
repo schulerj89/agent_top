@@ -273,6 +273,11 @@ p {
   color: #f6f4ef;
 }
 
+.rail-new-session {
+  width: 100%;
+  margin-bottom: 14px;
+}
+
 .run-message {
   color: #9ea7b6;
 }

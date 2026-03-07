@@ -15,7 +15,8 @@ use tauri::{AppHandle, Emitter, Manager, State};
 use tauri_plugin_dialog::DialogExt;
 
 use crate::storage::{
-    default_db_path, CreateSessionInput, SessionStore, SessionUpdate, StoredEvent, StoredSession,
+    default_db_path, CreateSessionInput, SessionRunUpdate, SessionStore, SessionUpdate,
+    StoredEvent, StoredSession,
 };
 
 struct AppState {
@@ -178,11 +179,7 @@ fn start_run(
         "run-{}",
         state.next_session_id.fetch_add(1, Ordering::Relaxed)
     );
-    let settings = RunSettings {
-        model: request.settings.model.clone(),
-        sandbox: request.settings.sandbox.clone(),
-        approval: request.settings.approval.clone(),
-    };
+    let settings = settings_payload_to_run(&request.settings);
 
     state.store.create_session(&CreateSessionInput {
         id: session_id.clone(),
@@ -193,15 +190,14 @@ fn start_run(
         settings: settings.clone(),
     })?;
 
-    let managed = start_codex_run(RunRequest {
-        session_id: session_id.clone(),
-        prompt: request.prompt,
+    launch_run(
+        app,
+        state.inner(),
+        session_id.clone(),
+        request.prompt,
         workspace,
         settings,
-    });
-
-    register_run(state.inner(), &session_id, managed.controller.clone())?;
-    forward_events(app, state.store.clone(), session_id.clone(), managed);
+    )?;
     Ok(StartRunResponse { session_id })
 }
 
@@ -244,16 +240,57 @@ fn retry_run(
         settings: settings.clone(),
     })?;
 
-    let managed = start_codex_run(RunRequest {
-        session_id: session_id.clone(),
-        prompt: record.prompt,
-        workspace: record.workspace,
+    launch_run(
+        app,
+        state.inner(),
+        session_id.clone(),
+        record.prompt,
+        record.workspace,
         settings,
-    });
-
-    register_run(state.inner(), &session_id, managed.controller.clone())?;
-    forward_events(app, state.store.clone(), session_id.clone(), managed);
+    )?;
     Ok(StartRunResponse { session_id })
+}
+
+#[tauri::command]
+fn continue_session(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    request: SessionLookupRequest,
+    run: RunRequestPayload,
+) -> Result<StartRunResponse, String> {
+    validate_request(&run)?;
+    if has_active_run(state.inner(), &request.session_id)? {
+        return Err("session is already running".to_string());
+    }
+
+    let workspace = normalize_workspace_display(&run.workspace);
+    let settings = settings_payload_to_run(&run.settings);
+    let updated = state.store.prepare_session_run(
+        &request.session_id,
+        &SessionRunUpdate {
+            prompt: run.prompt.clone(),
+            workspace: workspace.clone(),
+            lifecycle: SessionLifecycle::Launching,
+            status: "Launching".to_string(),
+            settings: settings.clone(),
+        },
+    )?;
+
+    if !updated {
+        return Err("session history entry not found".to_string());
+    }
+
+    launch_run(
+        app,
+        state.inner(),
+        request.session_id.clone(),
+        run.prompt,
+        workspace,
+        settings,
+    )?;
+    Ok(StartRunResponse {
+        session_id: request.session_id,
+    })
 }
 
 #[tauri::command]
@@ -277,6 +314,14 @@ impl Default for SettingsPayload {
             sandbox: "workspace-write".to_string(),
             approval: "never".to_string(),
         }
+    }
+}
+
+fn settings_payload_to_run(settings: &SettingsPayload) -> RunSettings {
+    RunSettings {
+        model: settings.model.clone(),
+        sandbox: settings.sandbox.clone(),
+        approval: settings.approval.clone(),
     }
 }
 
@@ -363,6 +408,26 @@ fn register_run(
         .lock()
         .map_err(|_| "active run state is unavailable".to_string())?;
     guard.insert(session_id.to_string(), controller);
+    Ok(())
+}
+
+fn launch_run(
+    app: AppHandle,
+    state: &AppState,
+    session_id: String,
+    prompt: String,
+    workspace: String,
+    settings: RunSettings,
+) -> Result<(), String> {
+    let managed = start_codex_run(RunRequest {
+        session_id: session_id.clone(),
+        prompt,
+        workspace,
+        settings,
+    });
+
+    register_run(state, &session_id, managed.controller.clone())?;
+    forward_events(app, state.store.clone(), session_id, managed);
     Ok(())
 }
 
@@ -529,6 +594,7 @@ pub fn run() {
             get_session_events,
             pick_workspace,
             start_run,
+            continue_session,
             cancel_run,
             retry_run,
             delete_session
@@ -668,6 +734,19 @@ mod tests {
             normalize_workspace_display(r"C:\Users\joshs\Projects\agent_top"),
             r"C:\Users\joshs\Projects\agent_top"
         );
+    }
+
+    #[test]
+    fn maps_settings_payload_to_run_settings() {
+        let mapped = settings_payload_to_run(&SettingsPayload {
+            model: "gpt-5".to_string(),
+            sandbox: "danger-full-access".to_string(),
+            approval: "never".to_string(),
+        });
+
+        assert_eq!(mapped.model, "gpt-5");
+        assert_eq!(mapped.sandbox, "danger-full-access");
+        assert_eq!(mapped.approval, "never");
     }
 
 }

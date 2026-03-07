@@ -55,6 +55,15 @@ pub struct SessionUpdate {
 }
 
 #[derive(Clone, Debug)]
+pub struct SessionRunUpdate {
+    pub prompt: String,
+    pub workspace: String,
+    pub lifecycle: SessionLifecycle,
+    pub status: String,
+    pub settings: RunSettings,
+}
+
+#[derive(Clone, Debug)]
 pub struct SessionStore {
     path: PathBuf,
 }
@@ -251,6 +260,45 @@ impl SessionStore {
             .map_err(|error| error.to_string())?;
 
         Ok(())
+    }
+
+    pub fn prepare_session_run(
+        &self,
+        session_id: &str,
+        update: &SessionRunUpdate,
+    ) -> Result<bool, String> {
+        let updated = self
+            .open()?
+            .execute(
+                r#"
+                update sessions
+                set prompt = ?2,
+                    workspace = ?3,
+                    lifecycle = ?4,
+                    status = ?5,
+                    updated_at = ?6,
+                    last_message = ?7,
+                    model = ?8,
+                    sandbox = ?9,
+                    approval = ?10
+                where id = ?1
+                "#,
+                params![
+                    session_id,
+                    update.prompt,
+                    update.workspace,
+                    lifecycle_to_str(update.lifecycle),
+                    update.status,
+                    now_ms(),
+                    "waiting for first event",
+                    update.settings.model,
+                    update.settings.sandbox,
+                    update.settings.approval
+                ],
+            )
+            .map_err(|error| error.to_string())?;
+
+        Ok(updated > 0)
     }
 
     pub fn list_sessions(&self, limit: Option<usize>) -> Result<Vec<StoredSession>, String> {
@@ -611,5 +659,52 @@ mod tests {
         assert!(store.get_session("run-1").expect("load session").is_none());
         assert!(store.list_events("run-1", None).expect("load events").is_empty());
         assert!(!store.delete_session("run-1").expect("delete missing session"));
+    }
+
+    #[test]
+    fn prepares_existing_session_for_continued_run() {
+        let (_dir, store) = store();
+        store
+            .create_session(&CreateSessionInput {
+                id: "run-1".to_string(),
+                prompt: "first prompt".to_string(),
+                workspace: "c:/repo-a".to_string(),
+                lifecycle: SessionLifecycle::Completed,
+                status: "Completed".to_string(),
+                settings: test_settings(),
+            })
+            .expect("create session");
+
+        let updated = store
+            .prepare_session_run(
+                "run-1",
+                &SessionRunUpdate {
+                    prompt: "second prompt".to_string(),
+                    workspace: "c:/repo-b".to_string(),
+                    lifecycle: SessionLifecycle::Launching,
+                    status: "Launching".to_string(),
+                    settings: RunSettings {
+                        model: "o4".to_string(),
+                        sandbox: "danger-full-access".to_string(),
+                        approval: "on-request".to_string(),
+                    },
+                },
+            )
+            .expect("prepare session");
+
+        let session = store
+            .get_session("run-1")
+            .expect("get session")
+            .expect("session exists");
+
+        assert!(updated);
+        assert_eq!(session.prompt, "second prompt");
+        assert_eq!(session.workspace, "c:/repo-b");
+        assert_eq!(session.lifecycle, SessionLifecycle::Launching);
+        assert_eq!(session.status, "Launching");
+        assert_eq!(session.settings.model, "o4");
+        assert_eq!(session.settings.sandbox, "danger-full-access");
+        assert_eq!(session.settings.approval, "on-request");
+        assert_eq!(session.last_message.as_deref(), Some("waiting for first event"));
     }
 }

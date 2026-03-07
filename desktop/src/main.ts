@@ -58,6 +58,7 @@ app.innerHTML = `
       </div>
 
       <div class="rail-search-wrap">
+        <button id="newSessionButton" class="primary rail-new-session" type="button">New Session</button>
         <label class="field rail-search-field">
           <span>Search Sessions</span>
           <input id="navSearchInput" type="text" placeholder="Search title, prompt, workspace, latest" />
@@ -196,6 +197,7 @@ const sandboxInput = document.querySelector<HTMLSelectElement>("#sandboxInput")!
 const approvalInput = document.querySelector<HTMLSelectElement>("#approvalInput")!;
 const chooseFolderButton = document.querySelector<HTMLButtonElement>("#chooseFolderButton")!;
 const addRunButton = document.querySelector<HTMLButtonElement>("#addRunButton")!;
+const newSessionButton = document.querySelector<HTMLButtonElement>("#newSessionButton")!;
 const composerMessage = document.querySelector<HTMLElement>("#composerMessage")!;
 const errorBanner = document.querySelector<HTMLElement>("#errorBanner")!;
 const navSearchInput = document.querySelector<HTMLInputElement>("#navSearchInput")!;
@@ -221,6 +223,7 @@ let currentWorkspace = "";
 let loading = true;
 let loadingDetail = false;
 let selectedSessionId: string | null = null;
+let draftingNewSession = false;
 const sessions = new Map<string, SessionState>();
 let navSearch = "";
 let eventFilter: SessionFilter = { query: "", kind: "all" };
@@ -262,6 +265,7 @@ function setLoadingState(isLoading: boolean) {
   loading = isLoading;
   chooseFolderButton.disabled = isLoading;
   addRunButton.disabled = isLoading;
+  newSessionButton.disabled = isLoading;
 }
 
 function applyComposerState(workspace: string, prompt: string, settings: SessionSettings | Settings) {
@@ -290,7 +294,17 @@ function ensureSelection() {
     return;
   }
 
+  if (draftingNewSession) {
+    return;
+  }
+
   selectedSessionId = pickInitialSessionId([...sessions.values()]);
+}
+
+function beginNewSessionDraft() {
+  draftingNewSession = true;
+  selectedSessionId = null;
+  applyComposerState(defaultWorkspace, "", defaultSettings);
 }
 
 function promptTitle(prompt: string): string {
@@ -338,7 +352,9 @@ function renderSelectedSession() {
   if (!session) {
     applyComposerState(defaultWorkspace, promptInput.value, defaultSettings);
     detailTitle.textContent = "No session selected";
-    detailSubtitle.textContent = "Choose a session from the left rail.";
+    detailSubtitle.textContent = draftingNewSession
+      ? "Compose a prompt to start a new session."
+      : "Choose a session from the left rail.";
     detailStatus.textContent = "-";
     detailEvents.textContent = "0";
     detailCommands.textContent = "0";
@@ -409,6 +425,7 @@ async function runGuarded(action: () => Promise<void>, fallback: string) {
 }
 
 async function selectSession(sessionId: string) {
+  draftingNewSession = false;
   selectedSessionId = sessionId;
   const selected = sessions.get(sessionId);
   if (selected) {
@@ -476,9 +493,10 @@ async function deleteSelectedSession() {
     selectedSessionId = pickInitialSessionId([...sessions.values()]);
     renderAll();
     if (selectedSessionId) {
+      draftingNewSession = false;
       await selectSession(selectedSessionId);
     } else {
-      applyComposerState(defaultWorkspace, "", defaultSettings);
+      beginNewSessionDraft();
       renderAll();
     }
     setComposerMessage(`Deleted ${sessionId}.`);
@@ -499,12 +517,54 @@ async function startRun(prompt: string) {
 
   await runGuarded(async () => {
     setLoadingState(true);
-    setComposerMessage("Starting Codex run...");
+    const settings = currentSettings();
+    const existing = selectedSessionId && !draftingNewSession ? sessions.get(selectedSessionId) ?? null : null;
+
+    if (existing) {
+      if (existing.running) {
+        throw new Error("session is already running");
+      }
+
+      setComposerMessage(`Continuing ${existing.id}...`);
+      const response = await invoke<StartRunResponse>("continue_session", {
+        request: { session_id: existing.id, limit: null },
+        run: {
+          prompt: trimmedPrompt,
+          workspace: currentWorkspace,
+          settings,
+        },
+      });
+
+      upsertSession({
+        session_id: response.session_id,
+        title: existing.title,
+        prompt: trimmedPrompt,
+        workspace: currentWorkspace,
+        lifecycle: "launching",
+        status: "Launching",
+        updated_at: String(Date.now()),
+        last_event_at: existing.updatedAt,
+        last_message: "waiting for first event",
+        total_events: existing.totalEvents,
+        command_count: existing.commands,
+        warning_count: existing.warnings,
+        error_count: 0,
+        settings,
+      });
+
+      selectedSessionId = response.session_id;
+      draftingNewSession = false;
+      renderAll();
+      setComposerMessage(`Continued ${response.session_id}.`);
+      return;
+    }
+
+    setComposerMessage("Starting new session...");
     const response = await invoke<StartRunResponse>("start_run", {
       request: {
         prompt: trimmedPrompt,
         workspace: currentWorkspace,
-        settings: currentSettings(),
+        settings,
       },
     });
 
@@ -522,10 +582,11 @@ async function startRun(prompt: string) {
       command_count: 0,
       warning_count: 0,
       error_count: 0,
-      settings: currentSettings(),
+      settings,
     });
 
     selectedSessionId = response.session_id;
+    draftingNewSession = false;
     renderAll();
     setComposerMessage(`Started ${response.session_id}.`);
   }, "Unable to start run.");
@@ -550,6 +611,7 @@ async function bootstrap() {
     renderAll();
 
     if (selectedSessionId) {
+      draftingNewSession = false;
       await selectSession(selectedSessionId);
     }
 
@@ -579,6 +641,12 @@ chooseFolderButton.addEventListener("click", async () => {
 
 addRunButton.addEventListener("click", async () => {
   await startRun(promptInput.value);
+});
+
+newSessionButton.addEventListener("click", () => {
+  beginNewSessionDraft();
+  renderAll();
+  setComposerMessage("Ready to start a new session.");
 });
 
 navSearchInput.addEventListener("input", () => {
