@@ -2,9 +2,13 @@ use std::collections::BTreeSet;
 use std::env;
 use std::fs;
 use std::io::{self, BufRead, BufReader, Stdout};
+use std::sync::mpsc::{self, Receiver};
+use std::thread;
+use std::time::Duration;
 use std::process::{self, Command, Stdio};
 
 use crossterm::cursor::{Hide, Show};
+use crossterm::event::{self, Event as CEvent, KeyCode, KeyEventKind, KeyModifiers};
 use crossterm::execute;
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
 use ratatui::backend::CrosstermBackend;
@@ -118,10 +122,10 @@ impl Summary {
 
 fn main() {
     let mut args = env::args().skip(1);
-    let command = args.next().unwrap_or_else(|| {
-        eprintln!("usage: agent_top <replay <event-log-path> | run <prompt>>");
-        process::exit(1);
-    });
+    let Some(command) = args.next() else {
+        run_app();
+        return;
+    };
 
     match command.as_str() {
         "replay" => {
@@ -174,80 +178,64 @@ fn run_codex(prompt: &str) {
         process::exit(1);
     });
 
-    let executable = if cfg!(windows) { "codex.cmd" } else { "codex" };
+    let mut terminal = init_terminal();
+    let mut summary = Summary::with_source("live codex session");
+    let receiver = spawn_codex_run(prompt.to_string(), workspace.to_string_lossy().into_owned());
 
-    let mut child = Command::new(executable)
-        .args([
-            "exec",
-            "--json",
-            "--skip-git-repo-check",
-            "-C",
-            workspace.to_string_lossy().as_ref(),
-            prompt,
-        ])
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .unwrap_or_else(|error| {
-            eprintln!("failed to start codex: {error}");
-            process::exit(1);
-        });
+    render_dashboard(&mut terminal, &summary);
+    drain_runner_events(&receiver, &mut terminal, &mut summary);
+}
 
-    let stdout = child.stdout.take().unwrap_or_else(|| {
-        eprintln!("failed to capture codex stdout");
-        process::exit(1);
-    });
-
-    let stderr = child.stderr.take().unwrap_or_else(|| {
-        eprintln!("failed to capture codex stderr");
+fn run_app() {
+    let workspace = env::current_dir().unwrap_or_else(|error| {
+        eprintln!("failed to resolve current directory: {error}");
         process::exit(1);
     });
 
     let mut terminal = init_terminal();
-    let mut summary = Summary::with_source("live codex session");
-    let mut stdout_reader = BufReader::new(stdout);
-    let mut line = String::new();
-
-    render_dashboard(&mut terminal, &summary);
+    let mut app = App::new(workspace.to_string_lossy().into_owned());
 
     loop {
-        line.clear();
-        let bytes_read = stdout_reader.read_line(&mut line).unwrap_or_else(|error| {
-            eprintln!("failed while reading codex output: {error}");
-            process::exit(1);
-        });
+        render_app(&mut terminal, &app);
 
-        if bytes_read == 0 {
+        let mut run_finished = false;
+        if let Some(receiver) = &app.receiver {
+            while let Ok(update) = receiver.try_recv() {
+                app.summary.record(update.event);
+                if update.finished {
+                    app.mode = AppMode::Ready;
+                    run_finished = true;
+                }
+            }
+        }
+        if run_finished {
+            app.receiver = None;
+        }
+
+        if event::poll(Duration::from_millis(50)).unwrap_or(false) {
+            let Ok(CEvent::Key(key)) = event::read() else {
+                continue;
+            };
+
+            if key.kind != KeyEventKind::Press {
+                continue;
+            }
+
+            if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
+                break;
+            }
+
+            match app.mode {
+                AppMode::Ready => handle_ready_key(&mut app, key.code),
+                AppMode::EditingPrompt => handle_prompt_key(&mut app, key.code),
+                AppMode::Running => handle_running_key(&mut app, key.code),
+            }
+        }
+
+        if app.should_quit {
             break;
         }
-
-        let trimmed = line.trim();
-        if trimmed.is_empty() {
-            continue;
-        }
-
-        let event = parse_codex_event(trimmed);
-        record_and_render(&mut terminal, &mut summary, event);
     }
-
-    collect_stderr_events(stderr, &mut terminal, &mut summary);
-
-    let exit_status = child.wait().unwrap_or_else(|error| {
-        eprintln!("failed to wait for codex: {error}");
-        process::exit(1);
-    });
-
-    let final_event = if exit_status.success() {
-        Event::new("session", EventKind::Status, "codex run completed successfully")
-    } else {
-        Event::new(
-            "session",
-            EventKind::Error,
-            format!("codex run failed with status {exit_status}"),
-        )
-    };
-
-    record_and_render(&mut terminal, &mut summary, final_event);
 }
 
 fn parse_event(line: &str) -> Option<Event> {
@@ -409,40 +397,154 @@ fn compact_text(text: &str) -> String {
     }
 }
 
-fn collect_stderr_events(
-    stderr: impl io::Read,
+fn record_and_render(terminal: &mut AppTerminal, summary: &mut Summary, event: Event) {
+    summary.record(event);
+    render_dashboard(terminal, summary);
+}
+
+fn drain_runner_events(
+    receiver: &Receiver<RunnerUpdate>,
     terminal: &mut AppTerminal,
     summary: &mut Summary,
 ) {
-    let stderr_reader = BufReader::new(stderr);
-    for result in stderr_reader.lines() {
-        match result {
-            Ok(stderr_line) if !stderr_line.trim().is_empty() => {
-                record_and_render(
-                    terminal,
-                    summary,
-                    Event::new("stderr", EventKind::Warning, stderr_line),
-                );
-            }
-            Ok(_) => {}
-            Err(error) => {
-                record_and_render(
-                    terminal,
-                    summary,
-                    Event::new(
-                        "stderr",
-                        EventKind::Warning,
-                        format!("stderr read error: {error}"),
-                    ),
-                );
-            }
+    while let Ok(update) = receiver.recv() {
+        record_and_render(terminal, summary, update.event);
+        if update.finished {
+            break;
         }
     }
 }
 
-fn record_and_render(terminal: &mut AppTerminal, summary: &mut Summary, event: Event) {
-    summary.record(event);
-    render_dashboard(terminal, summary);
+fn spawn_codex_run(prompt: String, workspace: String) -> Receiver<RunnerUpdate> {
+    let (sender, receiver) = mpsc::channel();
+
+    thread::spawn(move || {
+        let executable = if cfg!(windows) { "codex.cmd" } else { "codex" };
+        let mut child = match Command::new(executable)
+            .args([
+                "exec",
+                "--json",
+                "--skip-git-repo-check",
+                "-C",
+                workspace.as_str(),
+                prompt.as_str(),
+            ])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+        {
+            Ok(child) => child,
+            Err(error) => {
+                let _ = sender.send(RunnerUpdate::finished(Event::new(
+                    "session",
+                    EventKind::Error,
+                    format!("failed to start codex: {error}"),
+                )));
+                return;
+            }
+        };
+
+        let Some(stdout) = child.stdout.take() else {
+            let _ = sender.send(RunnerUpdate::finished(Event::new(
+                "session",
+                EventKind::Error,
+                "failed to capture codex stdout",
+            )));
+            return;
+        };
+
+        let Some(stderr) = child.stderr.take() else {
+            let _ = sender.send(RunnerUpdate::finished(Event::new(
+                "session",
+                EventKind::Error,
+                "failed to capture codex stderr",
+            )));
+            return;
+        };
+
+        stream_codex_stdout(stdout, &sender);
+        stream_codex_stderr(stderr, &sender);
+
+        let exit_status = match child.wait() {
+            Ok(status) => status,
+            Err(error) => {
+                let _ = sender.send(RunnerUpdate::finished(Event::new(
+                    "session",
+                    EventKind::Error,
+                    format!("failed to wait for codex: {error}"),
+                )));
+                return;
+            }
+        };
+
+        let event = if exit_status.success() {
+            Event::new("session", EventKind::Status, "codex run completed successfully")
+        } else {
+            Event::new(
+                "session",
+                EventKind::Error,
+                format!("codex run failed with status {exit_status}"),
+            )
+        };
+
+        let _ = sender.send(RunnerUpdate::finished(event));
+    });
+
+    receiver
+}
+
+fn stream_codex_stdout(stdout: impl io::Read, sender: &mpsc::Sender<RunnerUpdate>) {
+    let mut reader = BufReader::new(stdout);
+    let mut line = String::new();
+
+    loop {
+        line.clear();
+        let bytes_read = match reader.read_line(&mut line) {
+            Ok(bytes_read) => bytes_read,
+            Err(error) => {
+                let _ = sender.send(RunnerUpdate::event(Event::new(
+                    "stream",
+                    EventKind::Warning,
+                    format!("failed while reading codex output: {error}"),
+                )));
+                break;
+            }
+        };
+
+        if bytes_read == 0 {
+            break;
+        }
+
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+
+        let _ = sender.send(RunnerUpdate::event(parse_codex_event(trimmed)));
+    }
+}
+
+fn stream_codex_stderr(stderr: impl io::Read, sender: &mpsc::Sender<RunnerUpdate>) {
+    let stderr_reader = BufReader::new(stderr);
+    for result in stderr_reader.lines() {
+        match result {
+            Ok(stderr_line) if !stderr_line.trim().is_empty() => {
+                let _ = sender.send(RunnerUpdate::event(Event::new(
+                    "stderr",
+                    EventKind::Warning,
+                    stderr_line,
+                )));
+            }
+            Ok(_) => {}
+            Err(error) => {
+                let _ = sender.send(RunnerUpdate::event(Event::new(
+                    "stderr",
+                    EventKind::Warning,
+                    format!("stderr read error: {error}"),
+                )));
+            }
+        }
+    }
 }
 
 fn init_terminal() -> AppTerminal {
@@ -604,6 +706,173 @@ fn event_style(kind: EventKind) -> Style {
 
 struct AppTerminal {
     terminal: Terminal<CrosstermBackend<Stdout>>,
+}
+
+struct App {
+    mode: AppMode,
+    prompt_input: String,
+    summary: Summary,
+    receiver: Option<Receiver<RunnerUpdate>>,
+    workspace: String,
+    should_quit: bool,
+}
+
+impl App {
+    fn new(workspace: String) -> Self {
+        Self {
+            mode: AppMode::Ready,
+            prompt_input: String::new(),
+            summary: Summary::with_source("idle"),
+            receiver: None,
+            workspace,
+            should_quit: false,
+        }
+    }
+
+    fn start_run(&mut self) {
+        let prompt = self.prompt_input.trim().to_string();
+        if prompt.is_empty() {
+            return;
+        }
+
+        self.summary = Summary::with_source("live codex session");
+        self.summary.record(Event::new("app", EventKind::Status, "launching codex run"));
+        self.receiver = Some(spawn_codex_run(prompt, self.workspace.clone()));
+        self.mode = AppMode::Running;
+        self.prompt_input.clear();
+    }
+}
+
+#[derive(Clone, Copy)]
+enum AppMode {
+    Ready,
+    EditingPrompt,
+    Running,
+}
+
+struct RunnerUpdate {
+    event: Event,
+    finished: bool,
+}
+
+impl RunnerUpdate {
+    fn event(event: Event) -> Self {
+        Self {
+            event,
+            finished: false,
+        }
+    }
+
+    fn finished(event: Event) -> Self {
+        Self {
+            event,
+            finished: true,
+        }
+    }
+}
+
+fn handle_ready_key(app: &mut App, key: KeyCode) {
+    match key {
+        KeyCode::Char('n') => app.mode = AppMode::EditingPrompt,
+        KeyCode::Char('q') => app.should_quit = true,
+        _ => {}
+    }
+}
+
+fn handle_prompt_key(app: &mut App, key: KeyCode) {
+    match key {
+        KeyCode::Esc => app.mode = AppMode::Ready,
+        KeyCode::Enter => app.start_run(),
+        KeyCode::Backspace => {
+            app.prompt_input.pop();
+        }
+        KeyCode::Char(ch) => app.prompt_input.push(ch),
+        KeyCode::Tab => app.prompt_input.push(' '),
+        _ => {}
+    }
+}
+
+fn handle_running_key(app: &mut App, key: KeyCode) {
+    if let KeyCode::Char('q') = key {
+        app.summary
+            .record(Event::new("app", EventKind::Warning, "quit ignored while codex run is active"));
+    }
+}
+
+fn render_app(terminal: &mut AppTerminal, app: &App) {
+    let _ = terminal.terminal.draw(|frame| {
+        let vertical = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(7),
+                Constraint::Length(7),
+                Constraint::Min(8),
+                Constraint::Length(5),
+            ])
+            .split(frame.area());
+
+        let top = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Percentage(55), Constraint::Percentage(45)])
+            .split(vertical[0]);
+
+        let middle = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Percentage(35), Constraint::Percentage(65)])
+            .split(vertical[2]);
+
+        frame.render_widget(render_overview(&app.summary), top[0]);
+        frame.render_widget(render_metrics(&app.summary), top[1]);
+        frame.render_widget(render_launcher(app), vertical[1]);
+        frame.render_widget(render_files(&app.summary), middle[0]);
+        frame.render_widget(render_events(&app.summary), middle[1]);
+        frame.render_widget(render_help(app), vertical[3]);
+    });
+}
+
+fn render_launcher(app: &App) -> Paragraph<'static> {
+    let title = match app.mode {
+        AppMode::Ready => "Launcher",
+        AppMode::EditingPrompt => "New Run",
+        AppMode::Running => "Run In Progress",
+    };
+
+    let body = match app.mode {
+        AppMode::Ready => vec![
+            Line::from("Press n to start a new Codex run."),
+            Line::from(format!("Workspace: {}", app.workspace)),
+            Line::from("Settings panel is next; prompt entry is live now."),
+        ],
+        AppMode::EditingPrompt => vec![
+            Line::from("Type a prompt and press Enter to launch Codex."),
+            Line::from(vec![
+                Span::styled("Prompt: ", Style::default().fg(Color::Cyan)),
+                Span::raw(app.prompt_input.clone()),
+            ]),
+            Line::from("Esc cancels."),
+        ],
+        AppMode::Running => vec![
+            Line::from("Codex is running in the background."),
+            Line::from("Recent events continue updating below."),
+            Line::from("Ctrl+C exits the app."),
+        ],
+    };
+
+    Paragraph::new(body)
+        .block(Block::default().title(title).borders(Borders::ALL))
+        .wrap(Wrap { trim: true })
+}
+
+fn render_help(app: &App) -> Paragraph<'static> {
+    let line = match app.mode {
+        AppMode::Ready => "n new run | q quit | Ctrl+C force exit",
+        AppMode::EditingPrompt => "Enter launch run | Esc cancel | Backspace edit",
+        AppMode::Running => "Ctrl+C exit app | q disabled during active run",
+    };
+
+    Paragraph::new(vec![Line::from(line)])
+        .block(Block::default().title("Controls").borders(Borders::ALL))
+        .wrap(Wrap { trim: true })
 }
 
 impl Drop for AppTerminal {

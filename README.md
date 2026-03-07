@@ -16,6 +16,16 @@ Current scope:
 Example use:
 
 ```powershell
+cargo run --
+```
+
+Inside the app:
+
+- Press `n` to enter a prompt
+- Press `Enter` to launch a Codex run
+- Press `q` to quit from the home screen
+
+```powershell
 cargo run -- replay sample\session.log
 ```
 
