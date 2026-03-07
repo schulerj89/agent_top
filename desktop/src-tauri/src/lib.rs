@@ -1,4 +1,7 @@
+mod storage;
+
 use std::collections::HashMap;
+use std::io;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
@@ -10,6 +13,8 @@ use agent_top_core::{
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager, State};
 use tauri_plugin_dialog::DialogExt;
+
+use crate::storage::{default_db_path, SessionStore};
 
 struct AppState {
     default_workspace: String,
@@ -259,6 +264,11 @@ fn detect_workspace() -> String {
 pub fn run() {
     tauri::Builder::default()
         .setup(|app| {
+            let database_path = default_db_path();
+            SessionStore::new(database_path.clone())
+                .init()
+                .map_err(io::Error::other)?;
+
             let state = AppState {
                 default_workspace: detect_workspace(),
                 next_session_id: AtomicU64::new(1),
