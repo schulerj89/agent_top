@@ -145,8 +145,6 @@ app.innerHTML = `
               <p id="detailSubtitle" class="detail-subtitle">Choose a session from the left rail.</p>
             </div>
             <div class="detail-actions">
-              <button id="previousSessionButton" class="ghost">Previous</button>
-              <button id="nextSessionButton" class="ghost">Next</button>
               <button id="cancelRunButton" class="ghost">Cancel</button>
               <button id="retryRunButton" class="ghost">Retry</button>
               <button id="deleteSessionButton" class="ghost">Delete</button>
@@ -212,8 +210,6 @@ const detailWorkspace = document.querySelector<HTMLElement>("#detailWorkspace")!
 const detailPrompt = document.querySelector<HTMLElement>("#detailPrompt")!;
 const detailLatest = document.querySelector<HTMLElement>("#detailLatest")!;
 const detailMessage = document.querySelector<HTMLElement>("#detailMessage")!;
-const previousSessionButton = document.querySelector<HTMLButtonElement>("#previousSessionButton")!;
-const nextSessionButton = document.querySelector<HTMLButtonElement>("#nextSessionButton")!;
 const cancelRunButton = document.querySelector<HTMLButtonElement>("#cancelRunButton")!;
 const retryRunButton = document.querySelector<HTMLButtonElement>("#retryRunButton")!;
 const deleteSessionButton = document.querySelector<HTMLButtonElement>("#deleteSessionButton")!;
@@ -352,8 +348,6 @@ function renderSelectedSession() {
     detailLatest.textContent = "";
     detailMessage.textContent = "Session details load on demand.";
     detailEventsList.replaceChildren();
-    previousSessionButton.disabled = true;
-    nextSessionButton.disabled = true;
     cancelRunButton.disabled = true;
     retryRunButton.disabled = true;
     deleteSessionButton.disabled = true;
@@ -374,9 +368,6 @@ function renderSelectedSession() {
     : session.eventsLoaded
       ? "Session events are loaded from SQLite."
       : "Select a session to load its events.";
-  const ordered = sortedVisibleSessions();
-  previousSessionButton.disabled = ordered.length < 2;
-  nextSessionButton.disabled = ordered.length < 2;
   cancelRunButton.disabled = !session.running;
   retryRunButton.disabled = session.running;
   deleteSessionButton.disabled = session.running;
@@ -642,14 +633,6 @@ retryRunButton.addEventListener("click", async () => {
 
 deleteSessionButton.addEventListener("click", async () => {
   await deleteSelectedSession();
-});
-
-previousSessionButton.addEventListener("click", async () => {
-  await stepSelectedSession("previous");
-});
-
-nextSessionButton.addEventListener("click", async () => {
-  await stepSelectedSession("next");
 });
 
 window.addEventListener("keydown", async (event) => {
