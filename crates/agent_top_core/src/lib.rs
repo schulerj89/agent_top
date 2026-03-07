@@ -1,7 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
-use std::fs;
 use std::io::{self, BufRead, BufReader};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
@@ -229,36 +228,6 @@ pub enum SessionLifecycle {
     Failed,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct SessionRecord {
-    pub session_id: String,
-    pub prompt: String,
-    pub workspace: String,
-    pub lifecycle: SessionLifecycle,
-    pub status: String,
-    pub summary: Summary,
-    pub settings: RunSettings,
-    pub started_at: String,
-    pub updated_at: String,
-}
-
-impl SessionRecord {
-    pub fn from_request(request: &RunRequest) -> Self {
-        let now = now_timestamp();
-        Self {
-            session_id: request.session_id.clone(),
-            prompt: request.prompt.clone(),
-            workspace: request.workspace.clone(),
-            lifecycle: SessionLifecycle::Launching,
-            status: "Launching".to_string(),
-            summary: Summary::with_source("live codex session"),
-            settings: request.settings.clone(),
-            started_at: now.clone(),
-            updated_at: now,
-        }
-    }
-}
-
 pub struct RunnerUpdate {
     pub event: Event,
     pub finished: bool,
@@ -375,46 +344,6 @@ pub fn parse_codex_events(line: &str) -> Vec<Event> {
     events
 }
 
-pub fn load_session_history() -> io::Result<Vec<SessionRecord>> {
-    let path = history_path()?;
-    if !path.exists() {
-        return Ok(Vec::new());
-    }
-
-    let contents = fs::read_to_string(path)?;
-    if contents.trim().is_empty() {
-        return Ok(Vec::new());
-    }
-
-    serde_json::from_str(&contents).map_err(io::Error::other)
-}
-
-pub fn save_session_history(records: &[SessionRecord]) -> io::Result<()> {
-    let path = history_path()?;
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
-    }
-
-    let json = serde_json::to_string_pretty(records).map_err(io::Error::other)?;
-    fs::write(path, json)
-}
-
-pub fn upsert_session_record(record: &SessionRecord) -> io::Result<()> {
-    let mut records = load_session_history().unwrap_or_default();
-
-    if let Some(existing) = records
-        .iter_mut()
-        .find(|item| item.session_id == record.session_id)
-    {
-        *existing = record.clone();
-    } else {
-        records.push(record.clone());
-    }
-
-    records.sort_by(|left, right| right.updated_at.cmp(&left.updated_at));
-    save_session_history(&records)
-}
-
 pub fn start_codex_run(request: RunRequest) -> ManagedRun {
     let (sender, receiver) = mpsc::channel();
     let cancelled = Arc::new(AtomicBool::new(false));
@@ -425,9 +354,6 @@ pub fn start_codex_run(request: RunRequest) -> ManagedRun {
     };
 
     thread::spawn(move || {
-        let mut session = SessionRecord::from_request(&request);
-        let _ = upsert_session_record(&session);
-
         let executable = if cfg!(windows) { "codex.cmd" } else { "codex" };
         let mut command = Command::new(executable);
 
@@ -468,23 +394,10 @@ pub fn start_codex_run(request: RunRequest) -> ManagedRun {
                     EventKind::Error,
                     format!("failed to start codex: {error}"),
                 );
-                session.lifecycle = SessionLifecycle::Failed;
-                session.status = "Failed".to_string();
-                session.summary.record(event.clone());
-                session.updated_at = now_timestamp();
-                let _ = upsert_session_record(&session);
                 let _ = sender.send(RunnerUpdate::finished(event));
                 return;
             }
         };
-
-        session.lifecycle = SessionLifecycle::Running;
-        session.status = "Running".to_string();
-        session
-            .summary
-            .record(Event::new("app", EventKind::Status, "codex run launched"));
-        session.updated_at = now_timestamp();
-        let _ = upsert_session_record(&session);
 
         let stdout = process.stdout.take();
         let stderr = process.stderr.take();
@@ -515,22 +428,6 @@ pub fn start_codex_run(request: RunRequest) -> ManagedRun {
         }
 
         let event = final_event(&exit_status, cancelled.load(Ordering::Relaxed));
-        session.lifecycle = match (&exit_status, cancelled.load(Ordering::Relaxed)) {
-            (_, true) => SessionLifecycle::Cancelled,
-            (Ok(status), false) if status.success() => SessionLifecycle::Completed,
-            _ => SessionLifecycle::Failed,
-        };
-        session.status = match session.lifecycle {
-            SessionLifecycle::Cancelled => "Cancelled".to_string(),
-            SessionLifecycle::Completed => "Completed".to_string(),
-            SessionLifecycle::Failed => "Failed".to_string(),
-            SessionLifecycle::Launching => "Launching".to_string(),
-            SessionLifecycle::Running => "Running".to_string(),
-            SessionLifecycle::Cancelling => "Cancelling".to_string(),
-        };
-        session.summary.record(event.clone());
-        session.updated_at = now_timestamp();
-        let _ = upsert_session_record(&session);
         let _ = sender.send(RunnerUpdate::finished(event));
     });
 
@@ -859,19 +756,6 @@ fn classify_file_group(path: &str) -> String {
         .and_then(|value| value.to_str())
         .map(|ext| format!("*.{ext}"))
         .unwrap_or_else(|| "root".to_string())
-}
-
-fn history_path() -> io::Result<PathBuf> {
-    let base = std::env::var_os("APPDATA")
-        .map(PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|value| PathBuf::from(value).join(".config")))
-        .unwrap_or_else(|| std::env::temp_dir().join("agent_top"));
-
-    Ok(base.join("agent_top").join("history.json"))
-}
-
-fn now_timestamp() -> String {
-    unix_millis().to_string()
 }
 
 fn unix_millis() -> u128 {

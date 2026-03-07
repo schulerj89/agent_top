@@ -7,8 +7,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 
 use agent_top_core::{
-    next_session_id, start_codex_run, Event, EventKind, ManagedRun, RunController, RunRequest,
-    RunSettings, SessionLifecycle,
+    start_codex_run, Event, EventKind, ManagedRun, RunController, RunRequest, RunSettings,
+    SessionLifecycle,
 };
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager, State};
@@ -472,7 +472,6 @@ pub fn run() {
                 active_runs: Mutex::new(HashMap::new()),
             };
 
-            let _ = next_session_id();
             app.manage(state);
 
             if cfg!(debug_assertions) {
