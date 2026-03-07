@@ -7,10 +7,10 @@ use std::thread;
 use std::time::Duration;
 use std::process::{self, Command, Stdio};
 
-use crossterm::cursor::{Hide, Show};
+use crossterm::cursor::{Hide, MoveTo, Show};
 use crossterm::event::{self, Event as CEvent, KeyCode, KeyEventKind, KeyModifiers};
 use crossterm::execute;
-use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
+use crossterm::terminal::{disable_raw_mode, enable_raw_mode, Clear, ClearType};
 use ratatui::backend::CrosstermBackend;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
@@ -1143,7 +1143,12 @@ fn short_kind_label(kind: EventKind) -> &'static str {
 impl Drop for AppTerminal {
     fn drop(&mut self) {
         let _ = disable_raw_mode();
-        let _ = execute!(self.terminal.backend_mut(), Show);
+        let _ = execute!(
+            self.terminal.backend_mut(),
+            Show,
+            MoveTo(0, 0),
+            Clear(ClearType::All)
+        );
         let _ = self.terminal.show_cursor();
     }
 }
