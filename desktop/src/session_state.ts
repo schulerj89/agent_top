@@ -16,6 +16,12 @@ export type AgentEvent = {
   lifecycle: Lifecycle;
 };
 
+export type SessionSettings = {
+  model: string;
+  sandbox: string;
+  approval: string;
+};
+
 export type SessionListItem = {
   session_id: string;
   title: string;
@@ -30,11 +36,7 @@ export type SessionListItem = {
   command_count: number;
   warning_count: number;
   error_count: number;
-  settings: {
-    model: string;
-    sandbox: string;
-    approval: string;
-  };
+  settings: SessionSettings;
 };
 
 export type SessionEvent = {
@@ -52,6 +54,7 @@ export type SessionState = {
   title: string;
   prompt: string;
   workspace: string;
+  settings: SessionSettings;
   status: string;
   lifecycle: Lifecycle;
   running: boolean;
@@ -75,6 +78,7 @@ export function createSessionState(record: SessionListItem): SessionState {
     title: record.title,
     prompt: record.prompt,
     workspace: record.workspace,
+    settings: record.settings,
     status: record.status,
     lifecycle: record.lifecycle,
     running: isActiveLifecycle(record.lifecycle),
@@ -94,6 +98,7 @@ export function mergeSessionSummary(session: SessionState, summary: SessionListI
     title: summary.title,
     prompt: summary.prompt,
     workspace: summary.workspace,
+    settings: summary.settings,
     status: summary.status,
     lifecycle: summary.lifecycle,
     running: isActiveLifecycle(summary.lifecycle),

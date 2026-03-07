@@ -104,4 +104,27 @@ describe("session state", () => {
     expect(next.latestMessage).toBe("done");
     expect(next.updatedAt).toBe("200");
   });
+
+  it("keeps workspace and settings on session state", () => {
+    const session = createSessionState(
+      summary({
+        workspace: "c:/workspace-a",
+        settings: { model: "gpt-5", sandbox: "danger-full-access", approval: "never" },
+      }),
+    );
+
+    const next = mergeSessionSummary(
+      session,
+      summary({
+        workspace: "c:/workspace-b",
+        settings: { model: "o4", sandbox: "workspace-write", approval: "on-request" },
+      }),
+    );
+
+    expect(session.workspace).toBe("c:/workspace-a");
+    expect(session.settings.model).toBe("gpt-5");
+    expect(next.workspace).toBe("c:/workspace-b");
+    expect(next.settings.sandbox).toBe("workspace-write");
+    expect(next.settings.approval).toBe("on-request");
+  });
 });

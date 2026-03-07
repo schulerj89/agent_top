@@ -15,6 +15,7 @@ import {
   titleFromLifecycle,
   type AgentEvent,
   type Kind,
+  type SessionSettings,
   type SessionEvent,
   type SessionFilter,
   type SessionListItem,
@@ -225,6 +226,8 @@ let sidebarCollapsed = false;
 const sessions = new Map<string, SessionState>();
 let navSearch = "";
 let eventFilter: SessionFilter = { query: "", kind: "all" };
+let defaultSettings: Settings = { model: "", sandbox: "workspace-write", approval: "never" };
+let defaultWorkspace = "";
 
 function updateHeroStats() {
   const values = [...sessions.values()];
@@ -261,6 +264,15 @@ function setLoadingState(isLoading: boolean) {
   loading = isLoading;
   chooseFolderButton.disabled = isLoading;
   addRunButton.disabled = isLoading;
+}
+
+function applyComposerState(workspace: string, prompt: string, settings: SessionSettings | Settings) {
+  currentWorkspace = workspace;
+  workspaceLabel.textContent = workspace || "No workspace selected";
+  promptInput.value = prompt;
+  modelInput.value = settings.model;
+  sandboxInput.value = settings.sandbox;
+  approvalInput.value = settings.approval;
 }
 
 function renderSidebarState() {
@@ -343,6 +355,7 @@ function renderSelectedSession() {
   const session = selectedSessionId ? sessions.get(selectedSessionId) ?? null : null;
 
   if (!session) {
+    applyComposerState(defaultWorkspace, promptInput.value, defaultSettings);
     detailTitle.textContent = "No session selected";
     detailSubtitle.textContent = "Choose a session from the left rail.";
     detailStatus.textContent = "-";
@@ -420,6 +433,10 @@ async function runGuarded(action: () => Promise<void>, fallback: string) {
 
 async function selectSession(sessionId: string) {
   selectedSessionId = sessionId;
+  const selected = sessions.get(sessionId);
+  if (selected) {
+    applyComposerState(selected.workspace, selected.prompt, selected.settings);
+  }
   renderAll();
 
   const session = sessions.get(sessionId);
@@ -505,11 +522,9 @@ async function bootstrap() {
   await runGuarded(async () => {
     setLoadingState(true);
     const payload = await invoke<Bootstrap>("bootstrap");
-    currentWorkspace = payload.workspace;
-    workspaceLabel.textContent = payload.workspace;
-    modelInput.value = payload.settings.model;
-    sandboxInput.value = payload.settings.sandbox;
-    approvalInput.value = payload.settings.approval;
+    defaultWorkspace = payload.workspace;
+    defaultSettings = payload.settings;
+    applyComposerState(payload.workspace, "", payload.settings);
 
     sessions.clear();
     for (const summary of payload.sessions) {
@@ -543,6 +558,7 @@ chooseFolderButton.addEventListener("click", async () => {
     chooseFolderButton.disabled = true;
     const selected = await invoke<string | null>("pick_workspace");
     if (typeof selected === "string" && selected.trim()) {
+      defaultWorkspace = selected;
       currentWorkspace = selected;
       workspaceLabel.textContent = selected;
       setComposerMessage("Workspace updated.");
