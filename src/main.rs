@@ -48,6 +48,16 @@ struct Event {
     message: String,
 }
 
+impl Event {
+    fn new(timestamp: impl Into<String>, kind: EventKind, message: impl Into<String>) -> Self {
+        Self {
+            timestamp: timestamp.into(),
+            kind,
+            message: message.into(),
+        }
+    }
+}
+
 #[derive(Default)]
 struct Summary {
     current_status: Option<String>,
@@ -136,10 +146,8 @@ fn replay_log(path: &str) {
             continue;
         };
 
-        summary.record(event);
+        record_and_render(&mut summary, event, path);
     }
-
-    render_dashboard(&summary, &path);
 }
 
 fn run_codex(prompt: &str) {
@@ -178,11 +186,11 @@ fn run_codex(prompt: &str) {
     });
 
     let mut summary = Summary::default();
-    let mut stderr_lines = Vec::new();
     let mut stdout_reader = BufReader::new(stdout);
     let mut line = String::new();
+    let source = "live codex session";
 
-    render_dashboard(&summary, "live codex session");
+    render_dashboard(&summary, source);
 
     loop {
         line.clear();
@@ -200,49 +208,28 @@ fn run_codex(prompt: &str) {
             continue;
         }
 
-        summary.record(parse_codex_event(trimmed));
-        render_dashboard(&summary, "live codex session");
+        let event = parse_codex_event(trimmed);
+        record_and_render(&mut summary, event, source);
     }
 
-    let stderr_reader = BufReader::new(stderr);
-    for result in stderr_reader.lines() {
-        match result {
-            Ok(stderr_line) if !stderr_line.trim().is_empty() => stderr_lines.push(stderr_line),
-            Ok(_) => {}
-            Err(error) => stderr_lines.push(format!("stderr read error: {error}")),
-        }
-    }
+    collect_stderr_events(stderr, &mut summary, source);
 
     let exit_status = child.wait().unwrap_or_else(|error| {
         eprintln!("failed to wait for codex: {error}");
         process::exit(1);
     });
 
-    let final_status = if exit_status.success() {
-        "codex run completed successfully".to_string()
+    let final_event = if exit_status.success() {
+        Event::new("session", EventKind::Status, "codex run completed successfully")
     } else {
-        format!("codex run failed with status {exit_status}")
+        Event::new(
+            "session",
+            EventKind::Error,
+            format!("codex run failed with status {exit_status}"),
+        )
     };
 
-    summary.record(Event {
-        timestamp: "session".to_string(),
-        kind: if exit_status.success() {
-            EventKind::Status
-        } else {
-            EventKind::Error
-        },
-        message: final_status,
-    });
-
-    for stderr_line in stderr_lines {
-        summary.record(Event {
-            timestamp: "stderr".to_string(),
-            kind: EventKind::Warning,
-            message: stderr_line,
-        });
-    }
-
-    render_dashboard(&summary, "live codex session");
+    record_and_render(&mut summary, final_event, source);
 }
 
 fn parse_event(line: &str) -> Option<Event> {
@@ -251,26 +238,16 @@ fn parse_event(line: &str) -> Option<Event> {
     let kind = EventKind::parse(parts.next()?)?;
     let message = parts.next()?.trim().to_string();
 
-    Some(Event {
-        timestamp,
-        kind,
-        message,
-    })
+    Some(Event::new(timestamp, kind, message))
 }
 
 fn parse_codex_event(line: &str) -> Event {
-    let fallback = Event {
-        timestamp: "stream".to_string(),
-        kind: EventKind::Note,
-        message: line.to_string(),
-    };
-
     let Ok(value) = serde_json::from_str::<Value>(line) else {
-        return Event {
-            timestamp: "stream".to_string(),
-            kind: EventKind::Warning,
-            message: format!("invalid json event: {line}"),
-        };
+        return Event::new(
+            "stream",
+            EventKind::Warning,
+            format!("invalid json event: {line}"),
+        );
     };
 
     let event_type = value
@@ -279,48 +256,14 @@ fn parse_codex_event(line: &str) -> Event {
         .unwrap_or("unknown");
 
     match event_type {
-        "thread.started" => Event {
-            timestamp: "thread".to_string(),
-            kind: EventKind::Status,
-            message: format!(
-                "thread started: {}",
-                value
-                    .get("thread_id")
-                    .and_then(Value::as_str)
-                    .unwrap_or("unknown")
-            ),
-        },
-        "turn.started" => Event {
-            timestamp: "turn".to_string(),
-            kind: EventKind::Status,
-            message: "turn started".to_string(),
-        },
-        "turn.completed" => {
-            let usage = value.get("usage");
-            let input_tokens = usage
-                .and_then(|usage| usage.get("input_tokens"))
-                .and_then(Value::as_u64)
-                .unwrap_or(0);
-            let output_tokens = usage
-                .and_then(|usage| usage.get("output_tokens"))
-                .and_then(Value::as_u64)
-                .unwrap_or(0);
-
-            Event {
-                timestamp: "turn".to_string(),
-                kind: EventKind::Status,
-                message: format!(
-                    "turn completed: {} input tokens, {} output tokens",
-                    input_tokens, output_tokens
-                ),
-            }
-        }
-        "item.completed" => parse_completed_item(&value).unwrap_or(fallback),
-        _ => Event {
-            timestamp: "event".to_string(),
-            kind: EventKind::Note,
-            message: format!("{}: {}", event_type, compact_json(&value)),
-        },
+        "thread.started" => parse_thread_started(&value),
+        "turn.started" => Event::new("turn", EventKind::Status, "turn started"),
+        "turn.completed" => parse_turn_completed(&value),
+        "item.started" => parse_started_item(&value)
+            .unwrap_or_else(|| fallback_event("event", event_type, &value)),
+        "item.completed" => parse_completed_item(&value)
+            .unwrap_or_else(|| fallback_event("event", event_type, &value)),
+        _ => fallback_event("event", event_type, &value),
     }
 }
 
@@ -329,25 +272,147 @@ fn parse_completed_item(value: &Value) -> Option<Event> {
     let item_type = item.get("type")?.as_str()?;
 
     match item_type {
-        "agent_message" => Some(Event {
-            timestamp: "agent".to_string(),
-            kind: EventKind::Note,
-            message: item
-                .get("text")
+        "agent_message" => Some(Event::new(
+            "agent",
+            EventKind::Note,
+            item.get("text")
                 .and_then(Value::as_str)
-                .unwrap_or("(empty agent message)")
-                .to_string(),
-        }),
-        _ => Some(Event {
-            timestamp: "item".to_string(),
-            kind: EventKind::Note,
-            message: format!("{} completed", item_type),
-        }),
+                .unwrap_or("(empty agent message)"),
+        )),
+        "command_execution" => parse_command_execution(item, "completed"),
+        _ => Some(Event::new(
+            "item",
+            EventKind::Note,
+            format!("{} completed", item_type),
+        )),
     }
+}
+
+fn parse_started_item(value: &Value) -> Option<Event> {
+    let item = value.get("item")?;
+    let item_type = item.get("type")?.as_str()?;
+
+    match item_type {
+        "command_execution" => parse_command_execution(item, "started"),
+        _ => Some(Event::new(
+            "item",
+            EventKind::Note,
+            format!("{} started", item_type),
+        )),
+    }
+}
+
+fn parse_thread_started(value: &Value) -> Event {
+    Event::new(
+        "thread",
+        EventKind::Status,
+        format!(
+            "thread started: {}",
+            value
+                .get("thread_id")
+                .and_then(Value::as_str)
+                .unwrap_or("unknown")
+        ),
+    )
+}
+
+fn parse_turn_completed(value: &Value) -> Event {
+    let usage = value.get("usage");
+    let input_tokens = usage
+        .and_then(|usage| usage.get("input_tokens"))
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let output_tokens = usage
+        .and_then(|usage| usage.get("output_tokens"))
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+
+    Event::new(
+        "turn",
+        EventKind::Status,
+        format!(
+            "turn completed: {} input tokens, {} output tokens",
+            input_tokens, output_tokens
+        ),
+    )
+}
+
+fn parse_command_execution(item: &Value, stage: &str) -> Option<Event> {
+    let command = item.get("command").and_then(Value::as_str).unwrap_or("unknown");
+    let exit_code = item.get("exit_code").and_then(Value::as_i64);
+    let aggregated_output = item
+        .get("aggregated_output")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim();
+
+    let message = match (stage, exit_code, aggregated_output.is_empty()) {
+        ("started", _, _) => format!("started: {}", compact_command(command)),
+        ("completed", Some(code), true) => {
+            format!("completed (exit {}): {}", code, compact_command(command))
+        }
+        ("completed", Some(code), false) => format!(
+            "completed (exit {}): {} | {}",
+            code,
+            compact_command(command),
+            compact_text(aggregated_output)
+        ),
+        ("completed", None, _) => format!("completed: {}", compact_command(command)),
+        _ => format!("{}: {}", stage, compact_command(command)),
+    };
+
+    Some(Event::new("command", EventKind::Command, message))
+}
+
+fn fallback_event(timestamp: &str, event_type: &str, value: &Value) -> Event {
+    Event::new(
+        timestamp,
+        EventKind::Note,
+        format!("{}: {}", event_type, compact_json(value)),
+    )
 }
 
 fn compact_json(value: &Value) -> String {
     serde_json::to_string(value).unwrap_or_else(|_| "<unserializable event>".to_string())
+}
+
+fn compact_command(command: &str) -> String {
+    compact_text(command)
+}
+
+fn compact_text(text: &str) -> String {
+    const LIMIT: usize = 88;
+    let compact = text.split_whitespace().collect::<Vec<_>>().join(" ");
+
+    if compact.len() <= LIMIT {
+        compact
+    } else {
+        format!("{}...", &compact[..LIMIT - 3])
+    }
+}
+
+fn collect_stderr_events(stderr: impl io::Read, summary: &mut Summary, path: &str) {
+    let stderr_reader = BufReader::new(stderr);
+    for result in stderr_reader.lines() {
+        match result {
+            Ok(stderr_line) if !stderr_line.trim().is_empty() => {
+                record_and_render(summary, Event::new("stderr", EventKind::Warning, stderr_line), path);
+            }
+            Ok(_) => {}
+            Err(error) => {
+                record_and_render(
+                    summary,
+                    Event::new("stderr", EventKind::Warning, format!("stderr read error: {error}")),
+                    path,
+                );
+            }
+        }
+    }
+}
+
+fn record_and_render(summary: &mut Summary, event: Event, path: &str) {
+    summary.record(event);
+    render_dashboard(summary, path);
 }
 
 fn render_dashboard(summary: &Summary, path: &str) {
