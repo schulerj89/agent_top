@@ -304,7 +304,7 @@ p {
 
 .session-nav {
   display: grid;
-  gap: 2px;
+  gap: 0;
   overflow: auto;
   padding-right: 4px;
 }
@@ -316,7 +316,8 @@ p {
   border: 0;
   border-left: 2px solid transparent;
   background: transparent;
-  padding: 10px 10px 10px 14px;
+  min-height: 32px;
+  padding: 6px 8px 6px 12px;
   text-align: left;
   color: #9ea7b6;
   cursor: pointer;
@@ -336,7 +337,8 @@ p {
 .session-nav-title {
   display: block;
   font-weight: 700;
-  line-height: 1.35;
+  line-height: 1.2;
+  font-size: 0.95rem;
 }
 
 .detail-workspace {
@@ -357,9 +359,10 @@ p {
   place-items: center;
   width: 100%;
   aspect-ratio: 1;
-  border-radius: 12px;
+  min-height: 32px;
+  border-radius: 10px;
   font-weight: 800;
-  font-size: 1.1rem;
+  font-size: 0.95rem;
 }
 
 .session-nav-item[data-running="true"] .session-nav-title,
