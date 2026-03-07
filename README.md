@@ -62,4 +62,4 @@ See [sample/session.log](/C:/Users/joshs/Projects/agent_top/sample/session.log) 
 
 ## Codex integration
 
-`agent_top run ...` starts a local `codex exec --json` process, listens to JSONL events, and redraws a lightweight terminal dashboard as events arrive.
+`agent_top run ...` starts a local `codex exec --json` process, listens to JSONL events, and redraws a real terminal UI as events arrive.

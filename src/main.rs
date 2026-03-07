@@ -1,9 +1,18 @@
 use std::collections::BTreeSet;
 use std::env;
 use std::fs;
-use std::io::{self, BufRead, BufReader, Write};
+use std::io::{self, BufRead, BufReader, Stdout};
 use std::process::{self, Command, Stdio};
 
+use crossterm::cursor::{Hide, Show};
+use crossterm::execute;
+use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
+use ratatui::backend::CrosstermBackend;
+use ratatui::layout::{Constraint, Direction, Layout};
+use ratatui::style::{Color, Modifier, Style};
+use ratatui::text::{Line, Span};
+use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph, Wrap};
+use ratatui::Terminal;
 use serde_json::Value;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -60,6 +69,7 @@ impl Event {
 
 #[derive(Default)]
 struct Summary {
+    source: String,
     current_status: Option<String>,
     commands: usize,
     warnings: usize,
@@ -70,6 +80,13 @@ struct Summary {
 }
 
 impl Summary {
+    fn with_source(source: impl Into<String>) -> Self {
+        Self {
+            source: source.into(),
+            ..Self::default()
+        }
+    }
+
     fn record(&mut self, event: Event) {
         self.total_events += 1;
 
@@ -134,7 +151,8 @@ fn replay_log(path: &str) {
         process::exit(1);
     });
 
-    let mut summary = Summary::default();
+    let mut terminal = init_terminal();
+    let mut summary = Summary::with_source(path);
 
     for (line_number, line) in contents.lines().enumerate() {
         if line.trim().is_empty() {
@@ -146,7 +164,7 @@ fn replay_log(path: &str) {
             continue;
         };
 
-        record_and_render(&mut summary, event, path);
+        record_and_render(&mut terminal, &mut summary, event);
     }
 }
 
@@ -185,12 +203,12 @@ fn run_codex(prompt: &str) {
         process::exit(1);
     });
 
-    let mut summary = Summary::default();
+    let mut terminal = init_terminal();
+    let mut summary = Summary::with_source("live codex session");
     let mut stdout_reader = BufReader::new(stdout);
     let mut line = String::new();
-    let source = "live codex session";
 
-    render_dashboard(&summary, source);
+    render_dashboard(&mut terminal, &summary);
 
     loop {
         line.clear();
@@ -209,10 +227,10 @@ fn run_codex(prompt: &str) {
         }
 
         let event = parse_codex_event(trimmed);
-        record_and_render(&mut summary, event, source);
+        record_and_render(&mut terminal, &mut summary, event);
     }
 
-    collect_stderr_events(stderr, &mut summary, source);
+    collect_stderr_events(stderr, &mut terminal, &mut summary);
 
     let exit_status = child.wait().unwrap_or_else(|error| {
         eprintln!("failed to wait for codex: {error}");
@@ -229,7 +247,7 @@ fn run_codex(prompt: &str) {
         )
     };
 
-    record_and_render(&mut summary, final_event, source);
+    record_and_render(&mut terminal, &mut summary, final_event);
 }
 
 fn parse_event(line: &str) -> Option<Event> {
@@ -391,73 +409,207 @@ fn compact_text(text: &str) -> String {
     }
 }
 
-fn collect_stderr_events(stderr: impl io::Read, summary: &mut Summary, path: &str) {
+fn collect_stderr_events(
+    stderr: impl io::Read,
+    terminal: &mut AppTerminal,
+    summary: &mut Summary,
+) {
     let stderr_reader = BufReader::new(stderr);
     for result in stderr_reader.lines() {
         match result {
             Ok(stderr_line) if !stderr_line.trim().is_empty() => {
-                record_and_render(summary, Event::new("stderr", EventKind::Warning, stderr_line), path);
+                record_and_render(
+                    terminal,
+                    summary,
+                    Event::new("stderr", EventKind::Warning, stderr_line),
+                );
             }
             Ok(_) => {}
             Err(error) => {
                 record_and_render(
+                    terminal,
                     summary,
-                    Event::new("stderr", EventKind::Warning, format!("stderr read error: {error}")),
-                    path,
+                    Event::new(
+                        "stderr",
+                        EventKind::Warning,
+                        format!("stderr read error: {error}"),
+                    ),
                 );
             }
         }
     }
 }
 
-fn record_and_render(summary: &mut Summary, event: Event, path: &str) {
+fn record_and_render(terminal: &mut AppTerminal, summary: &mut Summary, event: Event) {
     summary.record(event);
-    render_dashboard(summary, path);
+    render_dashboard(terminal, summary);
 }
 
-fn render_dashboard(summary: &Summary, path: &str) {
+fn init_terminal() -> AppTerminal {
     let mut stdout = io::stdout();
-    let _ = write!(stdout, "\x1b[2J\x1b[H");
-    let _ = writeln!(stdout, "agent_top");
-    let _ = writeln!(stdout, "{}", "=".repeat(72));
-    let _ = writeln!(stdout, "source        : {path}");
-    let _ = writeln!(
-        stdout,
-        "status        : {}",
-        summary.current_status.as_deref().unwrap_or("unknown")
-    );
-    let _ = writeln!(stdout, "events        : {}", summary.total_events);
-    let _ = writeln!(stdout, "commands      : {}", summary.commands);
-    let _ = writeln!(stdout, "warnings      : {}", summary.warnings);
-    let _ = writeln!(stdout, "errors        : {}", summary.errors);
-    let _ = writeln!(stdout, "files touched : {}", summary.files_touched.len());
-    let _ = writeln!(stdout);
+    let _ = enable_raw_mode();
+    let _ = execute!(stdout, Hide);
 
-    let _ = writeln!(stdout, "tracked files");
-    let _ = writeln!(stdout, "{}", "-".repeat(72));
-    if summary.files_touched.is_empty() {
-        let _ = writeln!(stdout, "(none)");
-    } else {
-        for file in &summary.files_touched {
-            let _ = writeln!(stdout, "{file}");
-        }
-    }
+    let backend = CrosstermBackend::new(stdout);
+    let terminal = Terminal::new(backend).unwrap_or_else(|error| {
+        eprintln!("failed to initialize terminal UI: {error}");
+        process::exit(1);
+    });
 
-    let _ = writeln!(stdout);
-    let _ = writeln!(stdout, "recent events");
-    let _ = writeln!(stdout, "{}", "-".repeat(72));
-    if summary.recent_events.is_empty() {
-        let _ = writeln!(stdout, "(none)");
+    AppTerminal { terminal }
+}
+
+fn render_dashboard(terminal: &mut AppTerminal, summary: &Summary) {
+    let _ = terminal.terminal.draw(|frame| {
+        let vertical = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(7),
+                Constraint::Min(8),
+                Constraint::Length(10),
+            ])
+            .split(frame.area());
+
+        let top = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Percentage(55), Constraint::Percentage(45)])
+            .split(vertical[0]);
+
+        let middle = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Percentage(35), Constraint::Percentage(65)])
+            .split(vertical[1]);
+
+        frame.render_widget(render_overview(summary), top[0]);
+        frame.render_widget(render_metrics(summary), top[1]);
+        frame.render_widget(render_files(summary), middle[0]);
+        frame.render_widget(render_events(summary), middle[1]);
+        frame.render_widget(render_footer(summary), vertical[2]);
+    });
+}
+
+fn render_overview(summary: &Summary) -> Paragraph<'static> {
+    let lines = vec![
+        Line::from(vec![
+            Span::styled("agent_top", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+            Span::raw("  live session tracker"),
+        ]),
+        Line::from(format!("Source: {}", summary.source)),
+        Line::from(format!(
+            "Status: {}",
+            summary.current_status.as_deref().unwrap_or("unknown")
+        )),
+    ];
+
+    Paragraph::new(lines)
+        .block(Block::default().title("Overview").borders(Borders::ALL))
+        .wrap(Wrap { trim: true })
+}
+
+fn render_metrics(summary: &Summary) -> Paragraph<'static> {
+    let lines = vec![
+        metric_line("Events", summary.total_events, Color::Blue),
+        metric_line("Commands", summary.commands, Color::Yellow),
+        metric_line("Warnings", summary.warnings, Color::LightYellow),
+        metric_line("Errors", summary.errors, Color::LightRed),
+        metric_line("Files", summary.files_touched.len(), Color::Green),
+    ];
+
+    Paragraph::new(lines)
+        .block(Block::default().title("Metrics").borders(Borders::ALL))
+        .wrap(Wrap { trim: true })
+}
+
+fn metric_line(label: &str, value: usize, color: Color) -> Line<'static> {
+    Line::from(vec![
+        Span::styled(
+            format!("{label:<8}"),
+            Style::default().fg(Color::Gray).add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(value.to_string(), Style::default().fg(color)),
+    ])
+}
+
+fn render_files(summary: &Summary) -> List<'static> {
+    let items = if summary.files_touched.is_empty() {
+        vec![ListItem::new(Line::from("(none)"))]
     } else {
-        for event in &summary.recent_events {
-            let _ = writeln!(
-                stdout,
-                "{:<19} {:<8} {}",
-                event.timestamp,
-                event.kind.label(),
-                event.message
-            );
-        }
+        summary
+            .files_touched
+            .iter()
+            .map(|file| ListItem::new(Line::from(file.clone())))
+            .collect()
+    };
+
+    List::new(items).block(Block::default().title("Tracked Files").borders(Borders::ALL))
+}
+
+fn render_events(summary: &Summary) -> List<'static> {
+    let items = if summary.recent_events.is_empty() {
+        vec![ListItem::new(Line::from("(none)"))]
+    } else {
+        summary
+            .recent_events
+            .iter()
+            .map(render_event_item)
+            .collect()
+    };
+
+    List::new(items).block(Block::default().title("Recent Events").borders(Borders::ALL))
+}
+
+fn render_event_item(event: &Event) -> ListItem<'static> {
+    let style = event_style(event.kind);
+    let line = Line::from(vec![
+        Span::styled(
+            format!("{:<10}", event.timestamp),
+            Style::default().fg(Color::Gray),
+        ),
+        Span::styled(
+            format!("{:<8}", event.kind.label()),
+            style.add_modifier(Modifier::BOLD),
+        ),
+        Span::raw(" "),
+        Span::styled(event.message.clone(), style),
+    ]);
+
+    ListItem::new(line)
+}
+
+fn render_footer(summary: &Summary) -> Paragraph<'static> {
+    let last = summary
+        .recent_events
+        .last()
+        .map(|event| format!("Last event: {} {}", event.kind.label(), event.message))
+        .unwrap_or_else(|| "Last event: none".to_string());
+
+    Paragraph::new(vec![
+        Line::from(last),
+        Line::from("Press Ctrl+C to exit a live session."),
+    ])
+    .block(Block::default().title("Log").borders(Borders::ALL))
+    .wrap(Wrap { trim: true })
+}
+
+fn event_style(kind: EventKind) -> Style {
+    match kind {
+        EventKind::Status => Style::default().fg(Color::Cyan),
+        EventKind::Command => Style::default().fg(Color::Yellow),
+        EventKind::File => Style::default().fg(Color::Green),
+        EventKind::Warning => Style::default().fg(Color::LightYellow),
+        EventKind::Error => Style::default().fg(Color::LightRed),
+        EventKind::Note => Style::default().fg(Color::White),
     }
-    let _ = stdout.flush();
+}
+
+struct AppTerminal {
+    terminal: Terminal<CrosstermBackend<Stdout>>,
+}
+
+impl Drop for AppTerminal {
+    fn drop(&mut self) {
+        let _ = disable_raw_mode();
+        let _ = execute!(self.terminal.backend_mut(), Show);
+        let _ = self.terminal.show_cursor();
+    }
 }
