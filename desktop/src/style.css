@@ -34,6 +34,14 @@ button {
   border: 0;
 }
 
+button:disabled,
+input:disabled,
+textarea:disabled,
+select:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
 #app {
   min-height: 100vh;
 }
@@ -125,6 +133,19 @@ h1 {
   justify-content: space-between;
   gap: 20px;
   margin-bottom: 20px;
+}
+
+.error-banner {
+  margin-bottom: 20px;
+  border-radius: 18px;
+  padding: 14px 18px;
+  border: 1px solid rgba(255, 138, 138, 0.35);
+  background: rgba(120, 22, 22, 0.35);
+  color: #ffd4d4;
+}
+
+.hidden {
+  display: none;
 }
 
 .workspace-actions,
@@ -220,6 +241,23 @@ h1 {
   color: #9ea7b6;
 }
 
+.session-filters {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 220px;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.session-filters input,
+.session-filters select {
+  width: 100%;
+  border-radius: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  padding: 12px 14px;
+  color: #f6f4ef;
+  background: rgba(255, 255, 255, 0.04);
+}
+
 .session-list {
   display: grid;
   gap: 14px;
@@ -279,6 +317,18 @@ h1 {
   color: #f0f2f7;
 }
 
+.session-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.session-analytics {
+  margin-top: 12px;
+  color: #8f99a7;
+  font-size: 0.9rem;
+}
+
 .session-workspace,
 .event-time,
 .event-kind {
@@ -307,6 +357,11 @@ h1 {
   background: rgba(255, 255, 255, 0.06);
   color: #f6f4ef;
   cursor: pointer;
+}
+
+.empty-events {
+  color: #8f99a7;
+  list-style: none;
 }
 
 .event-item {
@@ -370,6 +425,10 @@ h1 {
   }
 
   .settings-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .session-filters {
     grid-template-columns: 1fr;
   }
 }

@@ -2,7 +2,17 @@ import "./style.css";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 
-type Kind = "status" | "command" | "file" | "warning" | "error" | "note";
+import {
+  applyAgentEvent,
+  createSessionState,
+  filterSessionEvents,
+  titleFromLifecycle,
+  type AgentEvent,
+  type Kind,
+  type SessionFilter,
+  type SessionRecord,
+  type SessionState,
+} from "./session_state";
 
 type Settings = {
   model: string;
@@ -13,42 +23,27 @@ type Settings = {
 type Bootstrap = {
   workspace: string;
   settings: Settings;
-};
-
-type AgentEvent = {
-  session_id: string;
-  timestamp: string;
-  kind: Kind;
-  message: string;
-  finished: boolean;
+  sessions: SessionRecord[];
 };
 
 type StartRunResponse = {
   session_id: string;
 };
 
-type SessionState = {
-  id: string;
-  prompt: string;
-  workspace: string;
-  status: string;
-  running: boolean;
-  expanded: boolean;
-  events: number;
-  commands: number;
-  warnings: number;
-  latestMessage: string;
-  eventsElement: HTMLUListElement;
+type SessionDom = {
+  cardElement: HTMLElement;
   statusElement: HTMLElement;
   metricsElement: HTMLElement;
-  cardElement: HTMLElement;
   latestElement: HTMLElement;
-  detailsElement: HTMLElement;
+  eventsElement: HTMLUListElement;
   toggleButton: HTMLButtonElement;
+  detailsElement: HTMLElement;
+  cancelButton: HTMLButtonElement;
+  retryButton: HTMLButtonElement;
+  analyticsElement: HTMLElement;
 };
 
 const app = document.querySelector<HTMLDivElement>("#app");
-
 if (!app) {
   throw new Error("app root not found");
 }
@@ -59,25 +54,13 @@ app.innerHTML = `
       <div>
         <p class="eyebrow">Desktop Monitor</p>
         <h1>agent_top</h1>
-        <p class="summary">Choose a workspace, launch multiple Codex sessions in parallel, and keep each run in its own live card.</p>
+        <p class="summary">Persistent session history, cancellable runs, event analytics, and searchable session cards for active and restored Codex runs.</p>
       </div>
       <div class="hero-meta">
-        <div class="meta-card">
-          <span>Active Runs</span>
-          <strong id="activeRuns">0</strong>
-        </div>
-        <div class="meta-card">
-          <span>Total Runs</span>
-          <strong id="totalRuns">0</strong>
-        </div>
-        <div class="meta-card">
-          <span>Total Events</span>
-          <strong id="totalEvents">0</strong>
-        </div>
-        <div class="meta-card">
-          <span>Total Warnings</span>
-          <strong id="totalWarnings">0</strong>
-        </div>
+        <div class="meta-card"><span>Active Runs</span><strong id="activeRuns">0</strong></div>
+        <div class="meta-card"><span>Total Runs</span><strong id="totalRuns">0</strong></div>
+        <div class="meta-card"><span>Total Events</span><strong id="totalEvents">0</strong></div>
+        <div class="meta-card"><span>Total Warnings</span><strong id="totalWarnings">0</strong></div>
       </div>
     </section>
 
@@ -92,11 +75,13 @@ app.innerHTML = `
       </div>
     </section>
 
+    <section id="errorBanner" class="error-banner hidden" role="alert"></section>
+
     <section class="grid">
       <section class="panel composer-panel">
         <header class="panel-header">
           <h2>Composer</h2>
-          <p>Each launch creates a separate session card below.</p>
+          <p>Validated launches only. Failed Tauri commands surface here instead of disappearing.</p>
         </header>
         <label class="field">
           <span>Prompt</span>
@@ -133,8 +118,20 @@ app.innerHTML = `
       <section class="panel sessions-panel">
         <header class="panel-header">
           <h2>Runs</h2>
-          <p>Add more sessions without replacing the current ones.</p>
+          <p>History is restored on startup. Use search and kind filters to cut down noisy sessions.</p>
         </header>
+        <div class="session-filters">
+          <input id="searchInput" type="text" placeholder="Search timestamps, kinds, and messages" />
+          <select id="kindFilter">
+            <option value="all">All kinds</option>
+            <option value="status">Status</option>
+            <option value="command">Command</option>
+            <option value="file">File</option>
+            <option value="warning">Warning</option>
+            <option value="error">Error</option>
+            <option value="note">Note</option>
+          </select>
+        </div>
         <div id="sessionList" class="session-list"></div>
       </section>
     </section>
@@ -154,20 +151,24 @@ const chooseFolderButton = document.querySelector<HTMLButtonElement>("#chooseFol
 const addRunButton = document.querySelector<HTMLButtonElement>("#addRunButton")!;
 const statusButton = document.querySelector<HTMLButtonElement>("#statusButton")!;
 const composerMessage = document.querySelector<HTMLElement>("#composerMessage")!;
+const errorBanner = document.querySelector<HTMLElement>("#errorBanner")!;
 const sessionList = document.querySelector<HTMLDivElement>("#sessionList")!;
+const searchInput = document.querySelector<HTMLInputElement>("#searchInput")!;
+const kindFilter = document.querySelector<HTMLSelectElement>("#kindFilter")!;
 
 let currentWorkspace = "";
-let sessionTotal = 0;
-let globalEventTotal = 0;
-let globalWarningTotal = 0;
-let runningCount = 0;
-const sessions = new Map<string, SessionState>();
+let loading = true;
+const sessionState = new Map<string, SessionState>();
+const sessionDom = new Map<string, SessionDom>();
+const expandedSessions = new Set<string>();
+let filter: SessionFilter = { query: "", kind: "all" };
 
 function updateHeroStats() {
-  activeRuns.textContent = String(runningCount);
-  totalRuns.textContent = String(sessionTotal);
-  totalEvents.textContent = String(globalEventTotal);
-  totalWarnings.textContent = String(globalWarningTotal);
+  const sessions = [...sessionState.values()];
+  activeRuns.textContent = String(sessions.filter((session) => session.running).length);
+  totalRuns.textContent = String(sessions.length);
+  totalEvents.textContent = String(sessions.reduce((sum, session) => sum + session.events.length, 0));
+  totalWarnings.textContent = String(sessions.reduce((sum, session) => sum + session.warnings, 0));
 }
 
 function currentSettings(): Settings {
@@ -182,107 +183,169 @@ function setComposerMessage(message: string) {
   composerMessage.textContent = message;
 }
 
-function createSessionCard(sessionId: string, prompt: string, workspace: string): SessionState {
+function setError(message: string | null) {
+  if (!message) {
+    errorBanner.classList.add("hidden");
+    errorBanner.textContent = "";
+    return;
+  }
+
+  errorBanner.classList.remove("hidden");
+  errorBanner.textContent = message;
+}
+
+function setLoadingState(isLoading: boolean) {
+  loading = isLoading;
+  chooseFolderButton.disabled = isLoading;
+  addRunButton.disabled = isLoading;
+  statusButton.disabled = isLoading;
+}
+
+function ensureSessionDom(session: SessionState): SessionDom {
+  const existing = sessionDom.get(session.id);
+  if (existing) {
+    return existing;
+  }
+
   const card = document.createElement("article");
   card.className = "session-card";
   card.innerHTML = `
     <header class="session-header">
       <div>
-        <span class="session-id">${sessionId}</span>
-        <h3>${prompt === "/status" ? "/status" : "Prompt Run"}</h3>
+        <span class="session-id">${session.id}</span>
+        <h3>${session.prompt === "/status" ? "/status" : "Prompt Run"}</h3>
       </div>
       <div class="session-header-actions">
-        <span class="session-status">Launching</span>
+        <span class="session-status">${session.status}</span>
         <button class="toggle-button" type="button">Expand</button>
       </div>
     </header>
     <p class="session-workspace"></p>
     <p class="session-prompt"></p>
-    <p class="session-latest">Latest: waiting for first event</p>
-    <div class="session-metrics">0 events - 0 commands - 0 warnings</div>
+    <p class="session-latest"></p>
+    <div class="session-metrics"></div>
+    <div class="session-actions">
+      <button class="ghost cancel-button" type="button">Cancel</button>
+      <button class="ghost retry-button" type="button">Retry</button>
+    </div>
+    <div class="session-analytics"></div>
     <div class="session-details is-collapsed">
       <ul class="session-events"></ul>
     </div>
   `;
 
-  card.querySelector<HTMLElement>(".session-workspace")!.textContent = workspace;
-  card.querySelector<HTMLElement>(".session-prompt")!.textContent = prompt;
+  card.querySelector<HTMLElement>(".session-workspace")!.textContent = session.workspace;
+  card.querySelector<HTMLElement>(".session-prompt")!.textContent = session.prompt;
   sessionList.prepend(card);
 
-  const detailsElement = card.querySelector<HTMLElement>(".session-details")!;
-  const toggleButton = card.querySelector<HTMLButtonElement>(".toggle-button")!;
-  toggleButton.addEventListener("click", () => {
-    const nextExpanded = detailsElement.classList.contains("is-collapsed");
-    detailsElement.classList.toggle("is-collapsed", !nextExpanded);
-    toggleButton.textContent = nextExpanded ? "Collapse" : "Expand";
-  });
-
-  return {
-    id: sessionId,
-    prompt,
-    workspace,
-    status: "Launching",
-    running: true,
-    expanded: false,
-    events: 0,
-    commands: 0,
-    warnings: 0,
-    latestMessage: "waiting for first event",
-    eventsElement: card.querySelector<HTMLUListElement>(".session-events")!,
+  const dom: SessionDom = {
+    cardElement: card,
     statusElement: card.querySelector<HTMLElement>(".session-status")!,
     metricsElement: card.querySelector<HTMLElement>(".session-metrics")!,
-    cardElement: card,
     latestElement: card.querySelector<HTMLElement>(".session-latest")!,
-    detailsElement,
-    toggleButton,
+    eventsElement: card.querySelector<HTMLUListElement>(".session-events")!,
+    toggleButton: card.querySelector<HTMLButtonElement>(".toggle-button")!,
+    detailsElement: card.querySelector<HTMLElement>(".session-details")!,
+    cancelButton: card.querySelector<HTMLButtonElement>(".cancel-button")!,
+    retryButton: card.querySelector<HTMLButtonElement>(".retry-button")!,
+    analyticsElement: card.querySelector<HTMLElement>(".session-analytics")!,
   };
+
+  dom.toggleButton.addEventListener("click", () => {
+    if (expandedSessions.has(session.id)) {
+      expandedSessions.delete(session.id);
+    } else {
+      expandedSessions.add(session.id);
+    }
+    renderSession(session.id);
+  });
+
+  dom.cancelButton.addEventListener("click", async () => {
+    await runGuarded(async () => {
+      await invoke("cancel_run", { request: { session_id: session.id } });
+      const current = sessionState.get(session.id);
+      if (current) {
+        sessionState.set(session.id, {
+          ...current,
+          lifecycle: "cancelling",
+          status: titleFromLifecycle("cancelling"),
+          running: true,
+        });
+        renderSession(session.id);
+        updateHeroStats();
+      }
+    }, "Unable to cancel run.");
+  });
+
+  dom.retryButton.addEventListener("click", async () => {
+    await runGuarded(async () => {
+      const response = await invoke<StartRunResponse>("retry_run", { request: { session_id: session.id } });
+      setComposerMessage(`Retried ${session.id} as ${response.session_id}.`);
+    }, "Unable to retry run.");
+  });
+
+  sessionDom.set(session.id, dom);
+  return dom;
 }
 
-function updateSessionSummary(session: SessionState) {
-  session.statusElement.textContent = session.status;
-  session.metricsElement.textContent = `${session.events} events - ${session.commands} commands - ${session.warnings} warnings`;
-  session.latestElement.textContent = `Latest: ${session.latestMessage}`;
-  session.cardElement.dataset.state = session.running ? "running" : "finished";
-}
-
-function appendSessionEvent(event: AgentEvent) {
-  const session = sessions.get(event.session_id);
-  if (!session) {
+function renderSession(sessionId: string) {
+  const state = sessionState.get(sessionId);
+  if (!state) {
     return;
   }
 
-  session.events += 1;
-  if (event.kind === "command") {
-    session.commands += 1;
+  const dom = ensureSessionDom(state);
+  dom.statusElement.textContent = state.status;
+  dom.metricsElement.textContent = `${state.events.length} events - ${state.commands} commands - ${state.warnings} warnings`;
+  dom.latestElement.textContent = `Latest: ${state.latestMessage}`;
+  dom.cardElement.dataset.state = state.lifecycle;
+  dom.cancelButton.disabled = !state.running;
+  dom.retryButton.disabled = state.running;
+
+  const expanded = expandedSessions.has(sessionId);
+  dom.detailsElement.classList.toggle("is-collapsed", !expanded);
+  dom.toggleButton.textContent = expanded ? "Collapse" : "Expand";
+
+  const visibleEvents = filterSessionEvents(state, filter).slice(-50).reverse();
+  dom.eventsElement.replaceChildren(
+    ...(
+      visibleEvents.length > 0
+        ? visibleEvents.map((event) => {
+            const item = document.createElement("li");
+            item.className = `event-item kind-${event.kind}`;
+            item.innerHTML = `
+              <span class="event-time">${event.timestamp}</span>
+              <span class="event-kind">${event.kind}</span>
+              <span class="event-message"></span>
+            `;
+            item.querySelector<HTMLElement>(".event-message")!.textContent = event.message;
+            return item;
+          })
+        : [Object.assign(document.createElement("li"), { className: "empty-events", textContent: "No matching events." })]
+    ),
+  );
+
+  const lastCommand = [...state.events].reverse().find((event) => event.kind === "command");
+  const fileEvents = state.events.filter((event) => event.kind === "file").length;
+  dom.analyticsElement.textContent = `Lifecycle: ${titleFromLifecycle(state.lifecycle)} | Files: ${fileEvents} | Last command: ${lastCommand?.message ?? "none"}`;
+}
+
+function renderAllSessions() {
+  for (const sessionId of sessionState.keys()) {
+    renderSession(sessionId);
   }
-  if (event.kind === "warning" || event.kind === "error") {
-    session.warnings += 1;
-    globalWarningTotal += 1;
-  }
-
-  globalEventTotal += 1;
-  session.status = event.finished ? "Completed" : event.kind === "status" ? event.message : "Running";
-  session.latestMessage = event.message;
-
-  const item = document.createElement("li");
-  item.className = `event-item kind-${event.kind}`;
-  item.innerHTML = `
-    <span class="event-time">${event.timestamp}</span>
-    <span class="event-kind">${event.kind}</span>
-    <span class="event-message"></span>
-  `;
-  item.querySelector<HTMLElement>(".event-message")!.textContent = event.message;
-  session.eventsElement.prepend(item);
-
-  if (event.finished && session.running) {
-    session.running = false;
-    runningCount = Math.max(0, runningCount - 1);
-    session.detailsElement.classList.add("is-collapsed");
-    session.toggleButton.textContent = "Expand";
-  }
-
-  updateSessionSummary(session);
   updateHeroStats();
+}
+
+async function runGuarded(action: () => Promise<void>, fallback: string) {
+  try {
+    setError(null);
+    await action();
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    setError(message || fallback);
+    setComposerMessage(message || fallback);
+  }
 }
 
 async function startRun(prompt: string) {
@@ -297,7 +360,8 @@ async function startRun(prompt: string) {
     return;
   }
 
-  try {
+  await runGuarded(async () => {
+    setLoadingState(true);
     setComposerMessage("Starting Codex run...");
     const response = await invoke<StartRunResponse>("start_run", {
       request: {
@@ -307,35 +371,66 @@ async function startRun(prompt: string) {
       },
     });
 
-    sessionTotal += 1;
-    runningCount += 1;
-    const session = createSessionCard(response.session_id, trimmedPrompt, currentWorkspace);
-    sessions.set(session.id, session);
+    const nextSession: SessionState = {
+      id: response.session_id,
+      prompt: trimmedPrompt,
+      workspace: currentWorkspace,
+      status: "Launching",
+      lifecycle: "launching",
+      running: true,
+      events: [],
+      commands: 0,
+      warnings: 0,
+      latestMessage: "waiting for first event",
+    };
+    sessionState.set(nextSession.id, nextSession);
+    expandedSessions.add(nextSession.id);
+    renderSession(nextSession.id);
     updateHeroStats();
     setComposerMessage(`Started ${response.session_id}.`);
-  } catch (error) {
-    setComposerMessage(error instanceof Error ? error.message : String(error));
-  }
+  }, "Unable to start run.");
+
+  setLoadingState(false);
 }
 
 async function bootstrap() {
-  const payload = await invoke<Bootstrap>("bootstrap");
-  currentWorkspace = payload.workspace;
-  workspaceLabel.textContent = payload.workspace;
-  modelInput.value = payload.settings.model;
-  sandboxInput.value = payload.settings.sandbox;
-  approvalInput.value = payload.settings.approval;
-  updateHeroStats();
+  await runGuarded(async () => {
+    setLoadingState(true);
+    const payload = await invoke<Bootstrap>("bootstrap");
+    currentWorkspace = payload.workspace;
+    workspaceLabel.textContent = payload.workspace;
+    modelInput.value = payload.settings.model;
+    sandboxInput.value = payload.settings.sandbox;
+    approvalInput.value = payload.settings.approval;
+
+    sessionState.clear();
+    for (const record of payload.sessions) {
+      const session = createSessionState(record);
+      sessionState.set(session.id, session);
+    }
+
+    renderAllSessions();
+    setComposerMessage(`Loaded ${payload.sessions.length} persisted sessions.`);
+  }, "Unable to bootstrap desktop state.");
+
+  setLoadingState(false);
 }
 
 chooseFolderButton.addEventListener("click", async () => {
-  const selected = await invoke<string | null>("pick_workspace");
-
-  if (typeof selected === "string") {
-    currentWorkspace = selected;
-    workspaceLabel.textContent = selected;
-    setComposerMessage("Workspace updated.");
+  if (loading) {
+    return;
   }
+
+  await runGuarded(async () => {
+    chooseFolderButton.disabled = true;
+    const selected = await invoke<string | null>("pick_workspace");
+    if (typeof selected === "string" && selected.trim()) {
+      currentWorkspace = selected;
+      workspaceLabel.textContent = selected;
+      setComposerMessage("Workspace updated.");
+    }
+  }, "Unable to choose workspace.");
+  chooseFolderButton.disabled = false;
 });
 
 addRunButton.addEventListener("click", async () => {
@@ -346,10 +441,28 @@ statusButton.addEventListener("click", async () => {
   await startRun("/status");
 });
 
+searchInput.addEventListener("input", () => {
+  filter = { ...filter, query: searchInput.value };
+  renderAllSessions();
+});
+
+kindFilter.addEventListener("change", () => {
+  filter = { ...filter, kind: kindFilter.value as Kind | "all" };
+  renderAllSessions();
+});
+
 listen<AgentEvent>("agent-event", (event) => {
-  appendSessionEvent(event.payload);
+  const current = sessionState.get(event.payload.session_id);
+  if (!current) {
+    return;
+  }
+
+  sessionState.set(current.id, applyAgentEvent(current, event.payload));
+  renderSession(current.id);
+  updateHeroStats();
 });
 
 bootstrap().catch((error) => {
-  setComposerMessage(error instanceof Error ? error.message : String(error));
+  setError(error instanceof Error ? error.message : String(error));
+  setLoadingState(false);
 });

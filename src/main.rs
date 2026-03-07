@@ -1,11 +1,14 @@
 use std::env;
 use std::fs;
 use std::io::{self, Stdout};
+use std::process;
 use std::sync::mpsc::Receiver;
 use std::time::Duration;
-use std::process;
 
-use agent_top_core::{compact_text_to, parse_event, spawn_codex_run, Event, EventKind, RunSettings, RunnerUpdate, Summary};
+use agent_top_core::{
+    compact_text_to, next_session_id, parse_event, start_codex_run, Event, EventKind, ManagedRun,
+    RunController, RunRequest, RunSettings, RunnerUpdate, Summary,
+};
 use crossterm::cursor::{Hide, MoveTo, Show};
 use crossterm::event::{self, Event as CEvent, KeyCode, KeyEventKind, KeyModifiers};
 use crossterm::execute;
@@ -76,14 +79,15 @@ fn run_codex(prompt: &str) {
 
     let mut terminal = init_terminal();
     let mut summary = Summary::with_source("live codex session");
-    let receiver = spawn_codex_run(
-        prompt.to_string(),
-        workspace.to_string_lossy().into_owned(),
-        RunSettings::default(),
-    );
+    let managed = start_codex_run(RunRequest {
+        session_id: next_session_id(),
+        prompt: prompt.to_string(),
+        workspace: workspace.to_string_lossy().into_owned(),
+        settings: RunSettings::default(),
+    });
 
     render_dashboard(&mut terminal, &summary);
-    drain_runner_events(&receiver, &mut terminal, &mut summary);
+    drain_runner_events(&managed.receiver, &mut terminal, &mut summary);
 }
 
 fn run_app() {
@@ -110,6 +114,7 @@ fn run_app() {
         }
         if run_finished {
             app.receiver = None;
+            app.controller = None;
         }
 
         if event::poll(Duration::from_millis(50)).unwrap_or(false) {
@@ -180,17 +185,28 @@ fn render_dashboard(terminal: &mut AppTerminal, summary: &Summary) {
         frame.render_widget(render_metrics(summary), top[1]);
         frame.render_widget(render_files(summary), middle[0]);
         frame.render_widget(render_events(summary, middle[1].width), middle[1]);
-        frame.render_widget(render_footer(summary, frame.area().width), footer_area(frame.area(), false));
+        frame.render_widget(
+            render_footer(summary, frame.area().width),
+            footer_area(frame.area(), false),
+        );
     });
 }
 
 fn render_overview(summary: &Summary, width: u16) -> Paragraph<'static> {
     let lines = vec![
         Line::from(vec![
-            Span::styled("agent_top", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                "agent_top",
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            ),
             Span::raw("  live session tracker"),
         ]),
-        Line::from(format!("Source: {}", compact_text_to(&summary.source, content_limit(width, 18)))),
+        Line::from(format!(
+            "Source: {}",
+            compact_text_to(&summary.source, content_limit(width, 18))
+        )),
         Line::from(format!(
             "Status: {}",
             compact_text_to(
@@ -223,7 +239,9 @@ fn metric_line(label: &str, value: usize, color: Color) -> Line<'static> {
     Line::from(vec![
         Span::styled(
             format!("{label:<8}"),
-            Style::default().fg(Color::Gray).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(Color::Gray)
+                .add_modifier(Modifier::BOLD),
         ),
         Span::styled(value.to_string(), Style::default().fg(color)),
     ])
@@ -240,7 +258,11 @@ fn render_files(summary: &Summary) -> List<'static> {
             .collect()
     };
 
-    List::new(items).block(Block::default().title("Tracked Files").borders(Borders::ALL))
+    List::new(items).block(
+        Block::default()
+            .title("Tracked Files")
+            .borders(Borders::ALL),
+    )
 }
 
 fn render_events(summary: &Summary, width: u16) -> List<'static> {
@@ -254,7 +276,11 @@ fn render_events(summary: &Summary, width: u16) -> List<'static> {
             .collect()
     };
 
-    List::new(items).block(Block::default().title("Recent Events").borders(Borders::ALL))
+    List::new(items).block(
+        Block::default()
+            .title("Recent Events")
+            .borders(Borders::ALL),
+    )
 }
 
 fn render_event_item(event: &Event, width: u16) -> ListItem<'static> {
@@ -290,12 +316,9 @@ fn render_footer(summary: &Summary, width: u16) -> Paragraph<'static> {
         })
         .unwrap_or_else(|| "Last event: none".to_string());
 
-    Paragraph::new(vec![
-        Line::from(last),
-        Line::from("Ctrl+C exits."),
-    ])
-    .block(Block::default().title("Log").borders(Borders::ALL))
-    .wrap(Wrap { trim: true })
+    Paragraph::new(vec![Line::from(last), Line::from("Ctrl+C exits.")])
+        .block(Block::default().title("Log").borders(Borders::ALL))
+        .wrap(Wrap { trim: true })
 }
 
 fn event_style(kind: EventKind) -> Style {
@@ -320,6 +343,8 @@ struct App {
     settings_field: SettingsField,
     summary: Summary,
     receiver: Option<Receiver<RunnerUpdate>>,
+    controller: Option<RunController>,
+    last_request: Option<RunRequest>,
     workspace: String,
     should_quit: bool,
 }
@@ -333,6 +358,8 @@ impl App {
             settings_field: SettingsField::Model,
             summary: Summary::with_source("idle"),
             receiver: None,
+            controller: None,
+            last_request: None,
             workspace,
             should_quit: false,
         }
@@ -345,14 +372,45 @@ impl App {
         }
 
         self.summary = Summary::with_source("live codex session");
-        self.summary.record(Event::new("app", EventKind::Status, "launching codex run"));
-        self.receiver = Some(spawn_codex_run(
+        self.summary
+            .record(Event::new("app", EventKind::Status, "launching codex run"));
+        let request = RunRequest {
+            session_id: next_session_id(),
             prompt,
-            self.workspace.clone(),
-            self.settings.clone(),
-        ));
+            workspace: self.workspace.clone(),
+            settings: self.settings.clone(),
+        };
+        let ManagedRun {
+            receiver,
+            controller,
+        } = start_codex_run(request.clone());
+        self.last_request = Some(request);
+        self.receiver = Some(receiver);
+        self.controller = Some(controller);
         self.mode = AppMode::Running;
         self.prompt_input.clear();
+    }
+
+    fn retry_last_run(&mut self) {
+        let Some(previous) = self.last_request.clone() else {
+            return;
+        };
+
+        let request = RunRequest {
+            session_id: next_session_id(),
+            ..previous
+        };
+        let ManagedRun {
+            receiver,
+            controller,
+        } = start_codex_run(request.clone());
+        self.summary = Summary::with_source("live codex session");
+        self.summary
+            .record(Event::new("app", EventKind::Status, "retrying codex run"));
+        self.last_request = Some(request);
+        self.receiver = Some(receiver);
+        self.controller = Some(controller);
+        self.mode = AppMode::Running;
     }
 }
 
@@ -387,12 +445,12 @@ impl SettingsField {
             Self::Approval => Self::Sandbox,
         }
     }
-
 }
 
 fn handle_ready_key(app: &mut App, key: KeyCode) {
     match key {
         KeyCode::Char('n') => app.mode = AppMode::EditingPrompt,
+        KeyCode::Char('r') => app.retry_last_run(),
         KeyCode::Char('s') => app.mode = AppMode::EditingSettings,
         KeyCode::Char('q') => app.should_quit = true,
         _ => {}
@@ -428,9 +486,30 @@ fn handle_settings_key(app: &mut App, key: KeyCode) {
 }
 
 fn handle_running_key(app: &mut App, key: KeyCode) {
-    if let KeyCode::Char('q') = key {
-        app.summary
-            .record(Event::new("app", EventKind::Warning, "quit ignored while codex run is active"));
+    match key {
+        KeyCode::Char('c') => {
+            if let Some(controller) = &app.controller {
+                let message = match controller.cancel() {
+                    Ok(true) => "cancellation requested for active codex run",
+                    Ok(false) => "run already finished before cancellation",
+                    Err(error) => {
+                        return app
+                            .summary
+                            .record(Event::new("app", EventKind::Error, error))
+                    }
+                };
+                app.summary
+                    .record(Event::new("app", EventKind::Warning, message));
+            }
+        }
+        KeyCode::Char('q') => {
+            app.summary.record(Event::new(
+                "app",
+                EventKind::Warning,
+                "quit ignored while codex run is active",
+            ));
+        }
+        _ => {}
     }
 }
 
@@ -461,8 +540,12 @@ fn render_launcher(app: &App) -> Paragraph<'static> {
     let body = match app.mode {
         AppMode::Ready => vec![
             Line::from("Press n to start a new Codex run."),
-            Line::from(format!("Workspace: {}", compact_text_to(&app.workspace, 32))),
+            Line::from(format!(
+                "Workspace: {}",
+                compact_text_to(&app.workspace, 32)
+            )),
             Line::from("Press s to edit settings."),
+            Line::from("Press r to retry the last completed run."),
         ],
         AppMode::EditingPrompt => vec![
             Line::from("Type a prompt and press Enter to launch Codex."),
@@ -480,7 +563,7 @@ fn render_launcher(app: &App) -> Paragraph<'static> {
         AppMode::Running => vec![
             Line::from("Codex is running in the background."),
             Line::from("Recent events continue updating below."),
-            Line::from("Ctrl+C exits the app."),
+            Line::from("Press c to cancel the active run."),
         ],
     };
 
@@ -491,7 +574,13 @@ fn render_launcher(app: &App) -> Paragraph<'static> {
 
 fn render_settings(app: &App) -> Paragraph<'static> {
     let fields = vec![
-        settings_line("Model", &app.settings.model, app.settings_field, SettingsField::Model, app.mode),
+        settings_line(
+            "Model",
+            &app.settings.model,
+            app.settings_field,
+            SettingsField::Model,
+            app.mode,
+        ),
         settings_line(
             "Sandbox",
             &app.settings.sandbox,
@@ -522,12 +611,21 @@ fn settings_line(
 ) -> Line<'static> {
     let is_selected = mode == AppMode::EditingSettings && selected == field;
     let label_style = if is_selected {
-        Style::default().fg(Color::Black).bg(Color::Cyan).add_modifier(Modifier::BOLD)
+        Style::default()
+            .fg(Color::Black)
+            .bg(Color::Cyan)
+            .add_modifier(Modifier::BOLD)
     } else {
-        Style::default().fg(Color::Gray).add_modifier(Modifier::BOLD)
+        Style::default()
+            .fg(Color::Gray)
+            .add_modifier(Modifier::BOLD)
     };
 
-    let shown = if value.trim().is_empty() { "(default)" } else { value };
+    let shown = if value.trim().is_empty() {
+        "(default)"
+    } else {
+        value
+    };
     let value_style = if is_selected {
         Style::default().fg(Color::Cyan)
     } else {
@@ -543,10 +641,10 @@ fn settings_line(
 
 fn render_help(app: &App) -> Paragraph<'static> {
     let line = match app.mode {
-        AppMode::Ready => "n new run | s settings | q quit | Ctrl+C force exit",
+        AppMode::Ready => "n new run | r retry last | s settings | q quit | Ctrl+C force exit",
         AppMode::EditingPrompt => "Enter launch run | Esc cancel | Backspace edit",
         AppMode::EditingSettings => "Up/Down choose field | type edit | Esc close",
-        AppMode::Running => "Ctrl+C exit app | q disabled during active run",
+        AppMode::Running => "c cancel run | Ctrl+C exit app | q disabled during active run",
     };
 
     Paragraph::new(vec![Line::from(line)])
