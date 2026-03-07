@@ -1,30 +1,41 @@
 # agent_top
 
-`agent_top` is a terminal-first tracker for coding agent sessions.
+`agent_top` is a Rust-based Codex session monitor with:
 
-This repository is being built in phases:
+- a shared runner core in Rust
+- a terminal UI for local monitoring
+- a Tauri desktop shell for multi-run workflows
 
-## Phase 1: Easy
+## Current Features
 
-Current scope:
+- Run `codex exec --json` and stream live events
+- Parse Codex JSONL into normalized session events
+- Monitor sessions in a Rust TUI
+- Launch desktop runs with prompt, workspace, and Codex settings
+- Run multiple desktop sessions in parallel
+- Pick a workspace from a folder dialog in the desktop app
+- Use compact session cards with expandable event feeds
 
-- Load a plain-text event log
-- Track session status, command counts, files touched, and recent events
-- Render a simple terminal dashboard
-- Run `codex exec --json` and stream a live dashboard in the terminal
+## Project Layout
 
-Example use:
+- [crates/agent_top_core](/C:/Users/joshs/Projects/agent_top/crates/agent_top_core)  
+  Shared Rust core for event parsing, session summaries, and Codex process spawning.
+
+- [src/main.rs](/C:/Users/joshs/Projects/agent_top/src/main.rs)  
+  Terminal app built on `ratatui` and `crossterm`.
+
+- [desktop](/C:/Users/joshs/Projects/agent_top/desktop)  
+  Tauri desktop app with a TypeScript frontend and Rust backend bridge.
+
+## Terminal App
+
+Run the TUI:
 
 ```powershell
 cargo run --
 ```
 
-Inside the app:
-
-- Press `n` to enter a prompt
-- Press `s` to edit settings
-- Press `Enter` to launch a Codex run
-- Press `q` to quit from the home screen
+Useful commands:
 
 ```powershell
 cargo run -- replay sample\session.log
@@ -34,34 +45,41 @@ cargo run -- replay sample\session.log
 cargo run -- run "Reply with the single word ready"
 ```
 
-Desktop shell:
+Inside the TUI:
+
+- `n` starts a new run
+- `s` opens settings
+- `q` quits from the home screen
+
+## Desktop App
+
+Run the desktop shell:
 
 ```powershell
 cd desktop
+npm install
 npm run tauri dev
 ```
 
-## Phase 2: Medium
+Desktop workflow:
 
-Planned scope:
+- choose a workspace folder
+- enter a prompt or use `/status`
+- launch multiple runs in parallel
+- inspect each run in its own session card
+- expand a card for detailed event history
 
-- Live follow mode for an active log file
-- Better terminal layout and color
-- Per-command durations and error summaries
-- Filtered views for commands, files, and warnings
+## Codex Settings
 
-## Phase 3: Ambitious
+Current run settings exposed in both app flows:
 
-Planned scope:
+- `model`
+- `sandbox`
+- `approval`
 
-- Local daemon that captures agent activity
-- Structured event protocol
-- Web or desktop companion UI
-- Session history and analytics
+## Event Format
 
-## Event format
-
-Each line in the input file uses this format:
+Replay mode accepts plain-text logs in this format:
 
 ```text
 timestamp|kind|message
@@ -76,14 +94,35 @@ Supported kinds:
 - `error`
 - `note`
 
-See [sample/session.log](/C:/Users/joshs/Projects/agent_top/sample/session.log) for a working example.
+Sample log:
 
-## Codex integration
+- [sample/session.log](/C:/Users/joshs/Projects/agent_top/sample/session.log)
 
-`agent_top run ...` starts a local `codex exec --json` process, listens to JSONL events, and redraws a real terminal UI as events arrive.
+## Build Checks
 
-Current in-app settings:
+Root workspace:
 
-- `model`
-- `sandbox`
-- `approval`
+```powershell
+cargo check
+```
+
+Desktop frontend:
+
+```powershell
+cd desktop
+npm run build
+```
+
+Desktop Rust backend:
+
+```powershell
+cd desktop
+cargo check --manifest-path src-tauri\Cargo.toml
+```
+
+## Next Steps
+
+- persist session history and settings
+- add cancel/stop per session
+- improve file activity and richer analytics
+- add automated tests around runner parsing and desktop session state
