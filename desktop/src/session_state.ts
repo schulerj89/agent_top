@@ -16,60 +16,52 @@ export type AgentEvent = {
   lifecycle: Lifecycle;
 };
 
-export type SessionEvent = {
-  timestamp: string;
-  kind: Kind;
-  message: string;
-};
-
-export type SessionSummary = {
-  source: string;
-  current_status: string | null;
-  commands: number;
-  warnings: number;
-  errors: number;
-  files_touched: string[];
-  recent_events: SessionEvent[];
-  total_events: number;
-  all_events: SessionEvent[];
-  analytics: {
-    command_runs: Array<{
-      command: string;
-      exit_code: number | null;
-      duration_ms: number | null;
-    }>;
-    exit_status_counts: Record<string, number>;
-    file_groups: Record<string, number>;
-  };
-};
-
-export type SessionRecord = {
+export type SessionListItem = {
   session_id: string;
+  title: string;
   prompt: string;
   workspace: string;
   lifecycle: Lifecycle;
   status: string;
-  summary: SessionSummary;
+  updated_at: string;
+  last_event_at: string | null;
+  last_message: string | null;
+  total_events: number;
+  command_count: number;
+  warning_count: number;
+  error_count: number;
   settings: {
     model: string;
     sandbox: string;
     approval: string;
   };
-  started_at: string;
-  updated_at: string;
+};
+
+export type SessionEvent = {
+  id?: number;
+  session_id?: string;
+  timestamp: string;
+  kind: Kind;
+  message: string;
+  payload_json?: string | null;
+  sequence_no?: number;
 };
 
 export type SessionState = {
   id: string;
+  title: string;
   prompt: string;
   workspace: string;
   status: string;
   lifecycle: Lifecycle;
   running: boolean;
   events: SessionEvent[];
+  eventsLoaded: boolean;
+  totalEvents: number;
   commands: number;
   warnings: number;
   latestMessage: string;
+  updatedAt: string;
 };
 
 export type SessionFilter = {
@@ -77,35 +69,71 @@ export type SessionFilter = {
   kind: Kind | "all";
 };
 
-export function createSessionState(record: SessionRecord): SessionState {
-  const events = [...record.summary.all_events];
-  const latest = events.at(-1)?.message ?? "waiting for first event";
-
+export function createSessionState(record: SessionListItem): SessionState {
   return {
     id: record.session_id,
+    title: record.title,
     prompt: record.prompt,
     workspace: record.workspace,
     status: record.status,
     lifecycle: record.lifecycle,
-    running: record.lifecycle === "launching" || record.lifecycle === "running" || record.lifecycle === "cancelling",
-    events,
-    commands: record.summary.commands,
-    warnings: record.summary.warnings + record.summary.errors,
-    latestMessage: latest,
+    running: isActiveLifecycle(record.lifecycle),
+    events: [],
+    eventsLoaded: false,
+    totalEvents: record.total_events,
+    commands: record.command_count,
+    warnings: record.warning_count + record.error_count,
+    latestMessage: record.last_message ?? "waiting for first event",
+    updatedAt: record.updated_at,
+  };
+}
+
+export function mergeSessionSummary(session: SessionState, summary: SessionListItem): SessionState {
+  return {
+    ...session,
+    title: summary.title,
+    prompt: summary.prompt,
+    workspace: summary.workspace,
+    status: summary.status,
+    lifecycle: summary.lifecycle,
+    running: isActiveLifecycle(summary.lifecycle),
+    totalEvents: summary.total_events,
+    commands: summary.command_count,
+    warnings: summary.warning_count + summary.error_count,
+    latestMessage: summary.last_message ?? session.latestMessage,
+    updatedAt: summary.updated_at,
+  };
+}
+
+export function attachSessionEvents(session: SessionState, events: SessionEvent[]): SessionState {
+  return {
+    ...session,
+    events: [...events].sort((left, right) => (left.sequence_no ?? 0) - (right.sequence_no ?? 0)),
+    eventsLoaded: true,
+    totalEvents: Math.max(session.totalEvents, events.length),
+    latestMessage: events.at(-1)?.message ?? session.latestMessage,
   };
 }
 
 export function applyAgentEvent(session: SessionState, event: AgentEvent): SessionState {
-  const events = [...session.events, { timestamp: event.timestamp, kind: event.kind, message: event.message }];
+  const nextEvent: SessionEvent = {
+    session_id: event.session_id,
+    timestamp: event.timestamp,
+    kind: event.kind,
+    message: event.message,
+  };
+
   return {
     ...session,
     status: event.finished ? titleFromLifecycle(event.lifecycle) : event.kind === "status" ? event.message : "Running",
     lifecycle: event.lifecycle,
-    running: !event.finished && (event.lifecycle === "launching" || event.lifecycle === "running" || event.lifecycle === "cancelling"),
-    events,
+    running: isActiveLifecycle(event.lifecycle) && !event.finished,
+    events: session.eventsLoaded ? [...session.events, nextEvent] : session.events,
+    totalEvents: session.totalEvents + 1,
     commands: session.commands + (event.kind === "command" ? 1 : 0),
     warnings: session.warnings + (event.kind === "warning" || event.kind === "error" ? 1 : 0),
     latestMessage: event.message,
+    updatedAt: event.timestamp,
   };
 }
 
@@ -128,6 +156,33 @@ export function filterSessionEvents(session: SessionState, filter: SessionFilter
   });
 }
 
+export function filterSessions(sessions: SessionState[], query: string): SessionState[] {
+  const normalized = query.trim().toLowerCase();
+  return sessions.filter((session) => {
+    if (!normalized) {
+      return true;
+    }
+
+    return (
+      session.title.toLowerCase().includes(normalized) ||
+      session.prompt.toLowerCase().includes(normalized) ||
+      session.workspace.toLowerCase().includes(normalized) ||
+      session.latestMessage.toLowerCase().includes(normalized)
+    );
+  });
+}
+
+export function sortSessions(sessions: SessionState[]): SessionState[] {
+  return [...sessions].sort((left, right) => {
+    const updated = Number(right.updatedAt) - Number(left.updatedAt);
+    return updated !== 0 ? updated : right.id.localeCompare(left.id);
+  });
+}
+
+export function pickInitialSessionId(sessions: SessionState[]): string | null {
+  return sortSessions(sessions)[0]?.id ?? null;
+}
+
 export function titleFromLifecycle(lifecycle: Lifecycle): string {
   switch (lifecycle) {
     case "launching":
@@ -143,4 +198,8 @@ export function titleFromLifecycle(lifecycle: Lifecycle): string {
     case "failed":
       return "Failed";
   }
+}
+
+function isActiveLifecycle(lifecycle: Lifecycle): boolean {
+  return lifecycle === "launching" || lifecycle === "running" || lifecycle === "cancelling";
 }

@@ -161,6 +161,26 @@ h1 {
   gap: 20px;
 }
 
+.browser-layout {
+  display: grid;
+  grid-template-columns: 320px minmax(0, 1fr);
+  gap: 18px;
+  min-height: 720px;
+}
+
+.session-sidebar {
+  border-right: 1px solid rgba(255, 255, 255, 0.08);
+  padding-right: 18px;
+}
+
+.session-detail {
+  padding-left: 4px;
+}
+
+.sidebar-header {
+  margin-bottom: 8px;
+}
+
 .panel-header {
   margin-bottom: 18px;
 }
@@ -258,110 +278,127 @@ h1 {
   background: rgba(255, 255, 255, 0.04);
 }
 
-.session-list {
+.session-nav {
   display: grid;
-  gap: 14px;
-  max-height: 740px;
+  gap: 10px;
+  max-height: 620px;
   overflow: auto;
   padding-right: 4px;
 }
 
-.session-card {
-  border-radius: 20px;
-  padding: 18px;
+.session-nav-item {
+  display: grid;
+  gap: 8px;
+  width: 100%;
+  border-radius: 18px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.03);
+  padding: 14px;
+  text-align: left;
+  color: #f6f4ef;
+  cursor: pointer;
 }
 
-.session-card[data-state="running"] {
-  border-color: rgba(242, 180, 93, 0.55);
+.session-nav-item[data-active="true"] {
+  border-color: rgba(242, 180, 93, 0.65);
+  background: rgba(242, 180, 93, 0.1);
 }
 
-.session-header {
+.session-nav-title {
+  font-weight: 700;
+}
+
+.session-nav-status,
+.session-nav-meta,
+.session-nav-latest,
+.detail-workspace {
+  font-family: "IBM Plex Mono", "Cascadia Code", monospace;
+  font-size: 0.82rem;
+}
+
+.session-nav-status {
+  color: #f2b45d;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.session-nav-meta,
+.session-nav-latest,
+.detail-subtitle,
+.detail-latest,
+.detail-prompt,
+.empty-sessions {
+  color: #96a0af;
+}
+
+.detail-header {
   display: flex;
   justify-content: space-between;
   gap: 16px;
   align-items: start;
+  margin-bottom: 18px;
 }
 
+.detail-actions,
 .session-header-actions {
   display: flex;
   align-items: center;
   gap: 10px;
 }
 
-.session-id {
-  display: inline-block;
-  margin-bottom: 8px;
+.detail-meta {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+  margin-bottom: 18px;
+}
+
+.meta-pill {
+  border-radius: 16px;
+  padding: 12px 14px;
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.meta-pill span {
+  display: block;
   color: #8f99a7;
-  font-size: 0.82rem;
-  letter-spacing: 0.12em;
+  font-size: 0.8rem;
   text-transform: uppercase;
+  letter-spacing: 0.08em;
 }
 
-.session-status {
-  border-radius: 999px;
-  padding: 6px 10px;
-  background: rgba(255, 255, 255, 0.08);
-  color: #f2b45d;
-  font-size: 0.82rem;
+.meta-pill strong {
+  display: block;
+  margin-top: 6px;
+  font-size: 1.1rem;
 }
 
-.session-workspace,
-.session-prompt,
-.session-metrics,
-.session-latest {
-  margin-top: 10px;
-  color: #b8c0cd;
+.detail-copy {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 18px;
 }
 
-.session-latest {
-  color: #f0f2f7;
-}
-
-.session-actions {
-  display: flex;
-  gap: 10px;
-  margin-top: 12px;
-}
-
-.session-analytics {
-  margin-top: 12px;
-  color: #8f99a7;
-  font-size: 0.9rem;
-}
-
-.session-workspace,
+.detail-workspace,
 .event-time,
 .event-kind {
   font-family: "IBM Plex Mono", "Cascadia Code", monospace;
   font-size: 0.82rem;
 }
 
-.session-events {
-  display: flex;
-  flex-direction: column-reverse;
+.empty-events {
+  color: #8f99a7;
+  list-style: none;
+}
+
+.detail-events {
+  display: grid;
   gap: 10px;
   list-style: none;
   margin: 16px 0 0;
   padding: 0;
-  max-height: 260px;
+  max-height: 420px;
   overflow: auto;
-}
-
-.session-details.is-collapsed {
-  display: none;
-}
-
-.toggle-button {
-  border-radius: 999px;
-  padding: 8px 12px;
-  background: rgba(255, 255, 255, 0.06);
-  color: #f6f4ef;
-  cursor: pointer;
-}
-
-.empty-events {
-  color: #8f99a7;
-  list-style: none;
 }
 
 .event-item {
@@ -418,6 +455,21 @@ h1 {
     grid-template-columns: 1fr;
   }
 
+  .browser-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .session-sidebar {
+    border-right: 0;
+    padding-right: 0;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+    padding-bottom: 18px;
+  }
+
+  .session-detail {
+    padding-left: 0;
+  }
+
   .workspace-bar,
   .workspace-actions {
     flex-direction: column;
@@ -430,6 +482,10 @@ h1 {
 
   .session-filters {
     grid-template-columns: 1fr;
+  }
+
+  .detail-meta {
+    grid-template-columns: 1fr 1fr;
   }
 }
 

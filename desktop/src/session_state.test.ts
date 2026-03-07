@@ -1,31 +1,40 @@
 import { describe, expect, it } from "vitest";
 
-import { applyAgentEvent, createSessionState, filterSessionEvents } from "./session_state";
+import {
+  applyAgentEvent,
+  attachSessionEvents,
+  createSessionState,
+  filterSessionEvents,
+  filterSessions,
+  mergeSessionSummary,
+  pickInitialSessionId,
+  sortSessions,
+  type SessionListItem,
+} from "./session_state";
+
+function summary(overrides: Partial<SessionListItem> = {}): SessionListItem {
+  return {
+    session_id: "run-1",
+    title: "Fix tests",
+    prompt: "Fix the failing tests",
+    workspace: "c:/repo",
+    lifecycle: "running",
+    status: "Running",
+    updated_at: "100",
+    last_event_at: "100",
+    last_message: "working",
+    total_events: 1,
+    command_count: 0,
+    warning_count: 0,
+    error_count: 0,
+    settings: { model: "", sandbox: "workspace-write", approval: "never" },
+    ...overrides,
+  };
+}
 
 describe("session state", () => {
   it("applies incoming events to counters and lifecycle", () => {
-    const session = createSessionState({
-      session_id: "run-1",
-      prompt: "/status",
-      workspace: "c:/repo",
-      lifecycle: "running",
-      status: "Running",
-      started_at: "1",
-      updated_at: "1",
-      settings: { model: "", sandbox: "workspace-write", approval: "never" },
-      summary: {
-        source: "live",
-        current_status: "Running",
-        commands: 0,
-        warnings: 0,
-        errors: 0,
-        files_touched: [],
-        recent_events: [],
-        total_events: 0,
-        all_events: [],
-        analytics: { command_runs: [], exit_status_counts: {}, file_groups: {} },
-      },
-    });
+    const session = attachSessionEvents(createSessionState(summary()), []);
 
     const next = applyAgentEvent(session, {
       session_id: "run-1",
@@ -39,36 +48,57 @@ describe("session state", () => {
     expect(next.commands).toBe(1);
     expect(next.running).toBe(false);
     expect(next.status).toBe("Completed");
+    expect(next.totalEvents).toBe(2);
   });
 
   it("filters events by text and kind", () => {
-    const session = createSessionState({
-      session_id: "run-1",
-      prompt: "prompt",
-      workspace: "c:/repo",
-      lifecycle: "completed",
-      status: "Completed",
-      started_at: "1",
-      updated_at: "1",
-      settings: { model: "", sandbox: "workspace-write", approval: "never" },
-      summary: {
-        source: "live",
-        current_status: "Completed",
-        commands: 1,
-        warnings: 1,
-        errors: 0,
-        files_touched: [],
-        recent_events: [],
-        total_events: 2,
-        all_events: [
-          { timestamp: "t1", kind: "command", message: "cargo test" },
-          { timestamp: "t2", kind: "warning", message: "stderr line" },
-        ],
-        analytics: { command_runs: [], exit_status_counts: {}, file_groups: {} },
-      },
-    });
+    const session = attachSessionEvents(createSessionState(summary()), [
+      { timestamp: "t1", kind: "command", message: "cargo test", sequence_no: 1 },
+      { timestamp: "t2", kind: "warning", message: "stderr line", sequence_no: 2 },
+    ]);
 
     expect(filterSessionEvents(session, { query: "cargo", kind: "all" })).toHaveLength(1);
     expect(filterSessionEvents(session, { query: "", kind: "warning" })).toHaveLength(1);
+  });
+
+  it("sorts and chooses the most recent session for initial selection", () => {
+    const sessions = [
+      createSessionState(summary({ session_id: "run-1", updated_at: "10" })),
+      createSessionState(summary({ session_id: "run-2", updated_at: "30" })),
+      createSessionState(summary({ session_id: "run-3", updated_at: "20" })),
+    ];
+
+    expect(sortSessions(sessions).map((session) => session.id)).toEqual(["run-2", "run-3", "run-1"]);
+    expect(pickInitialSessionId(sessions)).toBe("run-2");
+  });
+
+  it("filters sessions for the left nav", () => {
+    const sessions = [
+      createSessionState(summary({ session_id: "run-1", title: "Fix tests" })),
+      createSessionState(summary({ session_id: "run-2", title: "Review docs", workspace: "c:/docs" })),
+    ];
+
+    expect(filterSessions(sessions, "docs")).toHaveLength(1);
+    expect(filterSessions(sessions, "review")).toHaveLength(1);
+  });
+
+  it("merges refreshed sidebar summaries into existing state", () => {
+    const session = createSessionState(summary());
+    const next = mergeSessionSummary(
+      session,
+      summary({
+        lifecycle: "completed",
+        status: "Completed",
+        total_events: 5,
+        command_count: 2,
+        last_message: "done",
+        updated_at: "200",
+      }),
+    );
+
+    expect(next.lifecycle).toBe("completed");
+    expect(next.totalEvents).toBe(5);
+    expect(next.latestMessage).toBe("done");
+    expect(next.updatedAt).toBe("200");
   });
 });

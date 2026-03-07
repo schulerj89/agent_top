@@ -4,13 +4,19 @@ import { listen } from "@tauri-apps/api/event";
 
 import {
   applyAgentEvent,
+  attachSessionEvents,
   createSessionState,
   filterSessionEvents,
+  filterSessions,
+  mergeSessionSummary,
+  pickInitialSessionId,
+  sortSessions,
   titleFromLifecycle,
   type AgentEvent,
   type Kind,
+  type SessionEvent,
   type SessionFilter,
-  type SessionRecord,
+  type SessionListItem,
   type SessionState,
 } from "./session_state";
 
@@ -23,24 +29,11 @@ type Settings = {
 type Bootstrap = {
   workspace: string;
   settings: Settings;
-  sessions: SessionRecord[];
+  sessions: SessionListItem[];
 };
 
 type StartRunResponse = {
   session_id: string;
-};
-
-type SessionDom = {
-  cardElement: HTMLElement;
-  statusElement: HTMLElement;
-  metricsElement: HTMLElement;
-  latestElement: HTMLElement;
-  eventsElement: HTMLUListElement;
-  toggleButton: HTMLButtonElement;
-  detailsElement: HTMLElement;
-  cancelButton: HTMLButtonElement;
-  retryButton: HTMLButtonElement;
-  analyticsElement: HTMLElement;
 };
 
 const app = document.querySelector<HTMLDivElement>("#app");
@@ -54,7 +47,7 @@ app.innerHTML = `
       <div>
         <p class="eyebrow">Desktop Monitor</p>
         <h1>agent_top</h1>
-        <p class="summary">Persistent session history, cancellable runs, event analytics, and searchable session cards for active and restored Codex runs.</p>
+        <p class="summary">Browse persisted sessions from a left nav, inspect one run at a time, and keep live updates attached to the selected thread instead of stacking endless cards.</p>
       </div>
       <div class="hero-meta">
         <div class="meta-card"><span>Active Runs</span><strong id="activeRuns">0</strong></div>
@@ -81,7 +74,7 @@ app.innerHTML = `
       <section class="panel composer-panel">
         <header class="panel-header">
           <h2>Composer</h2>
-          <p>Validated launches only. Failed Tauri commands surface here instead of disappearing.</p>
+          <p>Launch new runs with the same validated controls. Active sessions immediately appear in the left nav.</p>
         </header>
         <label class="field">
           <span>Prompt</span>
@@ -115,24 +108,65 @@ app.innerHTML = `
         <p id="composerMessage" class="run-message">Ready.</p>
       </section>
 
-      <section class="panel sessions-panel">
-        <header class="panel-header">
-          <h2>Runs</h2>
-          <p>History is restored on startup. Use search and kind filters to cut down noisy sessions.</p>
-        </header>
-        <div class="session-filters">
-          <input id="searchInput" type="text" placeholder="Search timestamps, kinds, and messages" />
-          <select id="kindFilter">
-            <option value="all">All kinds</option>
-            <option value="status">Status</option>
-            <option value="command">Command</option>
-            <option value="file">File</option>
-            <option value="warning">Warning</option>
-            <option value="error">Error</option>
-            <option value="note">Note</option>
-          </select>
+      <section class="panel browser-panel">
+        <div class="browser-layout">
+          <aside class="session-sidebar">
+            <header class="panel-header sidebar-header">
+              <div>
+                <h2>Sessions</h2>
+                <p>Cycle between persisted runs from here.</p>
+              </div>
+            </header>
+            <label class="field">
+              <span>Search Sessions</span>
+              <input id="navSearchInput" type="text" placeholder="Search title, prompt, workspace, latest" />
+            </label>
+            <div id="sessionNav" class="session-nav"></div>
+          </aside>
+
+          <section class="session-detail">
+            <header class="detail-header">
+              <div>
+                <p class="panel-kicker">Selected Session</p>
+                <h2 id="detailTitle">No session selected</h2>
+                <p id="detailSubtitle" class="detail-subtitle">Choose a session from the left nav.</p>
+              </div>
+              <div class="detail-actions">
+                <button id="cancelRunButton" class="ghost">Cancel</button>
+                <button id="retryRunButton" class="ghost">Retry</button>
+              </div>
+            </header>
+
+            <div class="detail-meta" id="detailMeta">
+              <div class="meta-pill"><span>Status</span><strong id="detailStatus">-</strong></div>
+              <div class="meta-pill"><span>Events</span><strong id="detailEvents">0</strong></div>
+              <div class="meta-pill"><span>Commands</span><strong id="detailCommands">0</strong></div>
+              <div class="meta-pill"><span>Warnings</span><strong id="detailWarnings">0</strong></div>
+            </div>
+
+            <div class="detail-copy">
+              <p id="detailWorkspace" class="detail-workspace"></p>
+              <p id="detailPrompt" class="detail-prompt"></p>
+              <p id="detailLatest" class="detail-latest"></p>
+            </div>
+
+            <div class="session-filters">
+              <input id="eventSearchInput" type="text" placeholder="Search events in the selected session" />
+              <select id="kindFilter">
+                <option value="all">All kinds</option>
+                <option value="status">Status</option>
+                <option value="command">Command</option>
+                <option value="file">File</option>
+                <option value="warning">Warning</option>
+                <option value="error">Error</option>
+                <option value="note">Note</option>
+              </select>
+            </div>
+
+            <p id="detailMessage" class="run-message">Session details load on demand.</p>
+            <ul id="detailEventsList" class="detail-events"></ul>
+          </section>
         </div>
-        <div id="sessionList" class="session-list"></div>
       </section>
     </section>
   </main>
@@ -152,23 +186,38 @@ const addRunButton = document.querySelector<HTMLButtonElement>("#addRunButton")!
 const statusButton = document.querySelector<HTMLButtonElement>("#statusButton")!;
 const composerMessage = document.querySelector<HTMLElement>("#composerMessage")!;
 const errorBanner = document.querySelector<HTMLElement>("#errorBanner")!;
-const sessionList = document.querySelector<HTMLDivElement>("#sessionList")!;
-const searchInput = document.querySelector<HTMLInputElement>("#searchInput")!;
+const navSearchInput = document.querySelector<HTMLInputElement>("#navSearchInput")!;
+const sessionNav = document.querySelector<HTMLDivElement>("#sessionNav")!;
+const detailTitle = document.querySelector<HTMLElement>("#detailTitle")!;
+const detailSubtitle = document.querySelector<HTMLElement>("#detailSubtitle")!;
+const detailStatus = document.querySelector<HTMLElement>("#detailStatus")!;
+const detailEvents = document.querySelector<HTMLElement>("#detailEvents")!;
+const detailCommands = document.querySelector<HTMLElement>("#detailCommands")!;
+const detailWarnings = document.querySelector<HTMLElement>("#detailWarnings")!;
+const detailWorkspace = document.querySelector<HTMLElement>("#detailWorkspace")!;
+const detailPrompt = document.querySelector<HTMLElement>("#detailPrompt")!;
+const detailLatest = document.querySelector<HTMLElement>("#detailLatest")!;
+const detailMessage = document.querySelector<HTMLElement>("#detailMessage")!;
+const cancelRunButton = document.querySelector<HTMLButtonElement>("#cancelRunButton")!;
+const retryRunButton = document.querySelector<HTMLButtonElement>("#retryRunButton")!;
+const eventSearchInput = document.querySelector<HTMLInputElement>("#eventSearchInput")!;
 const kindFilter = document.querySelector<HTMLSelectElement>("#kindFilter")!;
+const detailEventsList = document.querySelector<HTMLUListElement>("#detailEventsList")!;
 
 let currentWorkspace = "";
 let loading = true;
-const sessionState = new Map<string, SessionState>();
-const sessionDom = new Map<string, SessionDom>();
-const expandedSessions = new Set<string>();
-let filter: SessionFilter = { query: "", kind: "all" };
+let loadingDetail = false;
+let selectedSessionId: string | null = null;
+const sessions = new Map<string, SessionState>();
+let navSearch = "";
+let eventFilter: SessionFilter = { query: "", kind: "all" };
 
 function updateHeroStats() {
-  const sessions = [...sessionState.values()];
-  activeRuns.textContent = String(sessions.filter((session) => session.running).length);
-  totalRuns.textContent = String(sessions.length);
-  totalEvents.textContent = String(sessions.reduce((sum, session) => sum + session.events.length, 0));
-  totalWarnings.textContent = String(sessions.reduce((sum, session) => sum + session.warnings, 0));
+  const values = [...sessions.values()];
+  activeRuns.textContent = String(values.filter((session) => session.running).length);
+  totalRuns.textContent = String(values.length);
+  totalEvents.textContent = String(values.reduce((sum, session) => sum + session.totalEvents, 0));
+  totalWarnings.textContent = String(values.reduce((sum, session) => sum + session.warnings, 0));
 }
 
 function currentSettings(): Settings {
@@ -201,139 +250,116 @@ function setLoadingState(isLoading: boolean) {
   statusButton.disabled = isLoading;
 }
 
-function ensureSessionDom(session: SessionState): SessionDom {
-  const existing = sessionDom.get(session.id);
-  if (existing) {
-    return existing;
-  }
-
-  const card = document.createElement("article");
-  card.className = "session-card";
-  card.innerHTML = `
-    <header class="session-header">
-      <div>
-        <span class="session-id">${session.id}</span>
-        <h3>${session.prompt === "/status" ? "/status" : "Prompt Run"}</h3>
-      </div>
-      <div class="session-header-actions">
-        <span class="session-status">${session.status}</span>
-        <button class="toggle-button" type="button">Expand</button>
-      </div>
-    </header>
-    <p class="session-workspace"></p>
-    <p class="session-prompt"></p>
-    <p class="session-latest"></p>
-    <div class="session-metrics"></div>
-    <div class="session-actions">
-      <button class="ghost cancel-button" type="button">Cancel</button>
-      <button class="ghost retry-button" type="button">Retry</button>
-    </div>
-    <div class="session-analytics"></div>
-    <div class="session-details is-collapsed">
-      <ul class="session-events"></ul>
-    </div>
-  `;
-
-  card.querySelector<HTMLElement>(".session-workspace")!.textContent = session.workspace;
-  card.querySelector<HTMLElement>(".session-prompt")!.textContent = session.prompt;
-  sessionList.prepend(card);
-
-  const dom: SessionDom = {
-    cardElement: card,
-    statusElement: card.querySelector<HTMLElement>(".session-status")!,
-    metricsElement: card.querySelector<HTMLElement>(".session-metrics")!,
-    latestElement: card.querySelector<HTMLElement>(".session-latest")!,
-    eventsElement: card.querySelector<HTMLUListElement>(".session-events")!,
-    toggleButton: card.querySelector<HTMLButtonElement>(".toggle-button")!,
-    detailsElement: card.querySelector<HTMLElement>(".session-details")!,
-    cancelButton: card.querySelector<HTMLButtonElement>(".cancel-button")!,
-    retryButton: card.querySelector<HTMLButtonElement>(".retry-button")!,
-    analyticsElement: card.querySelector<HTMLElement>(".session-analytics")!,
-  };
-
-  dom.toggleButton.addEventListener("click", () => {
-    if (expandedSessions.has(session.id)) {
-      expandedSessions.delete(session.id);
-    } else {
-      expandedSessions.add(session.id);
-    }
-    renderSession(session.id);
-  });
-
-  dom.cancelButton.addEventListener("click", async () => {
-    await runGuarded(async () => {
-      await invoke("cancel_run", { request: { session_id: session.id } });
-      const current = sessionState.get(session.id);
-      if (current) {
-        sessionState.set(session.id, {
-          ...current,
-          lifecycle: "cancelling",
-          status: titleFromLifecycle("cancelling"),
-          running: true,
-        });
-        renderSession(session.id);
-        updateHeroStats();
-      }
-    }, "Unable to cancel run.");
-  });
-
-  dom.retryButton.addEventListener("click", async () => {
-    await runGuarded(async () => {
-      const response = await invoke<StartRunResponse>("retry_run", { request: { session_id: session.id } });
-      setComposerMessage(`Retried ${session.id} as ${response.session_id}.`);
-    }, "Unable to retry run.");
-  });
-
-  sessionDom.set(session.id, dom);
-  return dom;
+function upsertSession(summary: SessionListItem) {
+  const existing = sessions.get(summary.session_id);
+  sessions.set(
+    summary.session_id,
+    existing ? mergeSessionSummary(existing, summary) : createSessionState(summary),
+  );
 }
 
-function renderSession(sessionId: string) {
-  const state = sessionState.get(sessionId);
-  if (!state) {
+function sortedVisibleSessions(): SessionState[] {
+  return sortSessions(filterSessions([...sessions.values()], navSearch));
+}
+
+function ensureSelection() {
+  if (selectedSessionId && sessions.has(selectedSessionId)) {
     return;
   }
 
-  const dom = ensureSessionDom(state);
-  dom.statusElement.textContent = state.status;
-  dom.metricsElement.textContent = `${state.events.length} events - ${state.commands} commands - ${state.warnings} warnings`;
-  dom.latestElement.textContent = `Latest: ${state.latestMessage}`;
-  dom.cardElement.dataset.state = state.lifecycle;
-  dom.cancelButton.disabled = !state.running;
-  dom.retryButton.disabled = state.running;
-
-  const expanded = expandedSessions.has(sessionId);
-  dom.detailsElement.classList.toggle("is-collapsed", !expanded);
-  dom.toggleButton.textContent = expanded ? "Collapse" : "Expand";
-
-  const visibleEvents = filterSessionEvents(state, filter).slice(-50).reverse();
-  dom.eventsElement.replaceChildren(
-    ...(
-      visibleEvents.length > 0
-        ? visibleEvents.map((event) => {
-            const item = document.createElement("li");
-            item.className = `event-item kind-${event.kind}`;
-            item.innerHTML = `
-              <span class="event-time">${event.timestamp}</span>
-              <span class="event-kind">${event.kind}</span>
-              <span class="event-message"></span>
-            `;
-            item.querySelector<HTMLElement>(".event-message")!.textContent = event.message;
-            return item;
-          })
-        : [Object.assign(document.createElement("li"), { className: "empty-events", textContent: "No matching events." })]
-    ),
-  );
-
-  const lastCommand = [...state.events].reverse().find((event) => event.kind === "command");
-  const fileEvents = state.events.filter((event) => event.kind === "file").length;
-  dom.analyticsElement.textContent = `Lifecycle: ${titleFromLifecycle(state.lifecycle)} | Files: ${fileEvents} | Last command: ${lastCommand?.message ?? "none"}`;
+  selectedSessionId = pickInitialSessionId([...sessions.values()]);
 }
 
-function renderAllSessions() {
-  for (const sessionId of sessionState.keys()) {
-    renderSession(sessionId);
+function renderSessionNav() {
+  const visible = sortedVisibleSessions();
+  sessionNav.replaceChildren(
+    ...(visible.length > 0
+      ? visible.map((session) => {
+          const button = document.createElement("button");
+          button.type = "button";
+          button.className = "session-nav-item";
+          if (session.id === selectedSessionId) {
+            button.dataset.active = "true";
+          }
+
+          button.innerHTML = `
+            <span class="session-nav-title"></span>
+            <span class="session-nav-status">${titleFromLifecycle(session.lifecycle)}</span>
+            <span class="session-nav-meta"></span>
+            <span class="session-nav-latest"></span>
+          `;
+          button.querySelector<HTMLElement>(".session-nav-title")!.textContent = session.title;
+          button.querySelector<HTMLElement>(".session-nav-meta")!.textContent =
+            `${session.totalEvents} events | ${session.workspace}`;
+          button.querySelector<HTMLElement>(".session-nav-latest")!.textContent = session.latestMessage;
+          button.addEventListener("click", async () => {
+            await selectSession(session.id);
+          });
+          return button;
+        })
+      : [Object.assign(document.createElement("p"), { className: "empty-sessions", textContent: "No sessions match the current search." })]),
+  );
+}
+
+function renderSelectedSession() {
+  const session = selectedSessionId ? sessions.get(selectedSessionId) ?? null : null;
+
+  if (!session) {
+    detailTitle.textContent = "No session selected";
+    detailSubtitle.textContent = "Choose a session from the left nav.";
+    detailStatus.textContent = "-";
+    detailEvents.textContent = "0";
+    detailCommands.textContent = "0";
+    detailWarnings.textContent = "0";
+    detailWorkspace.textContent = "";
+    detailPrompt.textContent = "";
+    detailLatest.textContent = "";
+    detailMessage.textContent = "Session details load on demand.";
+    detailEventsList.replaceChildren();
+    cancelRunButton.disabled = true;
+    retryRunButton.disabled = true;
+    return;
   }
+
+  detailTitle.textContent = session.title;
+  detailSubtitle.textContent = `${session.id} | ${session.updatedAt}`;
+  detailStatus.textContent = session.status;
+  detailEvents.textContent = String(session.totalEvents);
+  detailCommands.textContent = String(session.commands);
+  detailWarnings.textContent = String(session.warnings);
+  detailWorkspace.textContent = session.workspace;
+  detailPrompt.textContent = session.prompt;
+  detailLatest.textContent = `Latest: ${session.latestMessage}`;
+  detailMessage.textContent = loadingDetail
+    ? "Loading session events..."
+    : session.eventsLoaded
+      ? "Session events are loaded from SQLite."
+      : "Select a session to load its events.";
+  cancelRunButton.disabled = !session.running;
+  retryRunButton.disabled = session.running;
+
+  const visibleEvents = session.eventsLoaded ? filterSessionEvents(session, eventFilter).slice(-100).reverse() : [];
+  detailEventsList.replaceChildren(
+    ...(visibleEvents.length > 0
+      ? visibleEvents.map((event) => {
+          const item = document.createElement("li");
+          item.className = `event-item kind-${event.kind}`;
+          item.innerHTML = `
+            <span class="event-time">${event.timestamp}</span>
+            <span class="event-kind">${event.kind}</span>
+            <span class="event-message"></span>
+          `;
+          item.querySelector<HTMLElement>(".event-message")!.textContent = event.message;
+          return item;
+        })
+      : [Object.assign(document.createElement("li"), { className: "empty-events", textContent: session.eventsLoaded ? "No matching events." : "No events loaded yet." })]),
+  );
+}
+
+function renderAll() {
+  ensureSelection();
+  renderSessionNav();
+  renderSelectedSession();
   updateHeroStats();
 }
 
@@ -346,6 +372,32 @@ async function runGuarded(action: () => Promise<void>, fallback: string) {
     setError(message || fallback);
     setComposerMessage(message || fallback);
   }
+}
+
+async function selectSession(sessionId: string) {
+  selectedSessionId = sessionId;
+  renderAll();
+
+  const session = sessions.get(sessionId);
+  if (!session || session.eventsLoaded) {
+    return;
+  }
+
+  await runGuarded(async () => {
+    loadingDetail = true;
+    renderSelectedSession();
+    const events = await invoke<SessionEvent[]>("get_session_events", {
+      request: { session_id: sessionId, limit: 250 },
+    });
+    const current = sessions.get(sessionId);
+    if (current) {
+      sessions.set(sessionId, attachSessionEvents(current, events));
+    }
+  }, "Unable to load session events.");
+
+  loadingDetail = false;
+  renderSelectedSession();
+  renderSessionNav();
 }
 
 async function startRun(prompt: string) {
@@ -371,22 +423,25 @@ async function startRun(prompt: string) {
       },
     });
 
-    const nextSession: SessionState = {
-      id: response.session_id,
+    upsertSession({
+      session_id: response.session_id,
+      title: trimmedPrompt.length > 48 ? `${trimmedPrompt.slice(0, 45)}...` : trimmedPrompt,
       prompt: trimmedPrompt,
       workspace: currentWorkspace,
-      status: "Launching",
       lifecycle: "launching",
-      running: true,
-      events: [],
-      commands: 0,
-      warnings: 0,
-      latestMessage: "waiting for first event",
-    };
-    sessionState.set(nextSession.id, nextSession);
-    expandedSessions.add(nextSession.id);
-    renderSession(nextSession.id);
-    updateHeroStats();
+      status: "Launching",
+      updated_at: String(Date.now()),
+      last_event_at: null,
+      last_message: "waiting for first event",
+      total_events: 0,
+      command_count: 0,
+      warning_count: 0,
+      error_count: 0,
+      settings: currentSettings(),
+    });
+
+    selectedSessionId = response.session_id;
+    renderAll();
     setComposerMessage(`Started ${response.session_id}.`);
   }, "Unable to start run.");
 
@@ -403,13 +458,18 @@ async function bootstrap() {
     sandboxInput.value = payload.settings.sandbox;
     approvalInput.value = payload.settings.approval;
 
-    sessionState.clear();
-    for (const record of payload.sessions) {
-      const session = createSessionState(record);
-      sessionState.set(session.id, session);
+    sessions.clear();
+    for (const summary of payload.sessions) {
+      upsertSession(summary);
     }
 
-    renderAllSessions();
+    ensureSelection();
+    renderAll();
+
+    if (selectedSessionId) {
+      await selectSession(selectedSessionId);
+    }
+
     setComposerMessage(`Loaded ${payload.sessions.length} persisted sessions.`);
   }, "Unable to bootstrap desktop state.");
 
@@ -441,25 +501,70 @@ statusButton.addEventListener("click", async () => {
   await startRun("/status");
 });
 
-searchInput.addEventListener("input", () => {
-  filter = { ...filter, query: searchInput.value };
-  renderAllSessions();
+navSearchInput.addEventListener("input", () => {
+  navSearch = navSearchInput.value;
+  renderSessionNav();
+});
+
+eventSearchInput.addEventListener("input", () => {
+  eventFilter = { ...eventFilter, query: eventSearchInput.value };
+  renderSelectedSession();
 });
 
 kindFilter.addEventListener("change", () => {
-  filter = { ...filter, kind: kindFilter.value as Kind | "all" };
-  renderAllSessions();
+  eventFilter = { ...eventFilter, kind: kindFilter.value as Kind | "all" };
+  renderSelectedSession();
 });
 
-listen<AgentEvent>("agent-event", (event) => {
-  const current = sessionState.get(event.payload.session_id);
-  if (!current) {
+cancelRunButton.addEventListener("click", async () => {
+  if (!selectedSessionId) {
     return;
   }
+  const sessionId = selectedSessionId;
 
-  sessionState.set(current.id, applyAgentEvent(current, event.payload));
-  renderSession(current.id);
-  updateHeroStats();
+  await runGuarded(async () => {
+    await invoke("cancel_run", { request: { session_id: sessionId } });
+    const current = sessions.get(sessionId);
+    if (current) {
+      sessions.set(sessionId, {
+        ...current,
+        lifecycle: "cancelling",
+        status: titleFromLifecycle("cancelling"),
+        running: true,
+      });
+      renderAll();
+    }
+  }, "Unable to cancel run.");
+});
+
+retryRunButton.addEventListener("click", async () => {
+  if (!selectedSessionId) {
+    return;
+  }
+  const sessionId = selectedSessionId;
+
+  await runGuarded(async () => {
+    const response = await invoke<StartRunResponse>("retry_run", {
+      request: { session_id: sessionId },
+    });
+    setComposerMessage(`Retried ${sessionId} as ${response.session_id}.`);
+  }, "Unable to retry run.");
+});
+
+listen<AgentEvent>("agent-event", async (event) => {
+  const existing = sessions.get(event.payload.session_id);
+  if (existing) {
+    sessions.set(existing.id, applyAgentEvent(existing, event.payload));
+  } else {
+    const summary = await invoke<SessionListItem | null>("get_session", {
+      request: { session_id: event.payload.session_id },
+    });
+    if (summary) {
+      upsertSession(summary);
+    }
+  }
+
+  renderAll();
 });
 
 bootstrap().catch((error) => {
