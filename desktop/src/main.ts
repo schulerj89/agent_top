@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 
 import {
+  adjacentSessionId,
   applyAgentEvent,
   attachSessionEvents,
   createSessionState,
@@ -132,6 +133,8 @@ app.innerHTML = `
                 <p id="detailSubtitle" class="detail-subtitle">Choose a session from the left nav.</p>
               </div>
               <div class="detail-actions">
+                <button id="previousSessionButton" class="ghost">Previous</button>
+                <button id="nextSessionButton" class="ghost">Next</button>
                 <button id="cancelRunButton" class="ghost">Cancel</button>
                 <button id="retryRunButton" class="ghost">Retry</button>
               </div>
@@ -198,6 +201,8 @@ const detailWorkspace = document.querySelector<HTMLElement>("#detailWorkspace")!
 const detailPrompt = document.querySelector<HTMLElement>("#detailPrompt")!;
 const detailLatest = document.querySelector<HTMLElement>("#detailLatest")!;
 const detailMessage = document.querySelector<HTMLElement>("#detailMessage")!;
+const previousSessionButton = document.querySelector<HTMLButtonElement>("#previousSessionButton")!;
+const nextSessionButton = document.querySelector<HTMLButtonElement>("#nextSessionButton")!;
 const cancelRunButton = document.querySelector<HTMLButtonElement>("#cancelRunButton")!;
 const retryRunButton = document.querySelector<HTMLButtonElement>("#retryRunButton")!;
 const eventSearchInput = document.querySelector<HTMLInputElement>("#eventSearchInput")!;
@@ -316,6 +321,8 @@ function renderSelectedSession() {
     detailLatest.textContent = "";
     detailMessage.textContent = "Session details load on demand.";
     detailEventsList.replaceChildren();
+    previousSessionButton.disabled = true;
+    nextSessionButton.disabled = true;
     cancelRunButton.disabled = true;
     retryRunButton.disabled = true;
     return;
@@ -335,6 +342,9 @@ function renderSelectedSession() {
     : session.eventsLoaded
       ? "Session events are loaded from SQLite."
       : "Select a session to load its events.";
+  const ordered = sortedVisibleSessions();
+  previousSessionButton.disabled = ordered.length < 2;
+  nextSessionButton.disabled = ordered.length < 2;
   cancelRunButton.disabled = !session.running;
   retryRunButton.disabled = session.running;
 
@@ -398,6 +408,15 @@ async function selectSession(sessionId: string) {
   loadingDetail = false;
   renderSelectedSession();
   renderSessionNav();
+}
+
+async function stepSelectedSession(direction: "next" | "previous") {
+  const nextId = adjacentSessionId(sortedVisibleSessions(), selectedSessionId, direction);
+  if (!nextId || nextId === selectedSessionId) {
+    return;
+  }
+
+  await selectSession(nextId);
 }
 
 async function startRun(prompt: string) {
@@ -549,6 +568,31 @@ retryRunButton.addEventListener("click", async () => {
     });
     setComposerMessage(`Retried ${sessionId} as ${response.session_id}.`);
   }, "Unable to retry run.");
+});
+
+previousSessionButton.addEventListener("click", async () => {
+  await stepSelectedSession("previous");
+});
+
+nextSessionButton.addEventListener("click", async () => {
+  await stepSelectedSession("next");
+});
+
+window.addEventListener("keydown", async (event) => {
+  const target = event.target;
+  if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement || target instanceof HTMLSelectElement) {
+    return;
+  }
+
+  if (event.key === "[" || event.key === "ArrowUp") {
+    event.preventDefault();
+    await stepSelectedSession("previous");
+  }
+
+  if (event.key === "]" || event.key === "ArrowDown") {
+    event.preventDefault();
+    await stepSelectedSession("next");
+  }
 });
 
 listen<AgentEvent>("agent-event", async (event) => {

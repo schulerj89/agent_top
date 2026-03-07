@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  adjacentSessionId,
   applyAgentEvent,
   attachSessionEvents,
   createSessionState,
@@ -70,6 +71,8 @@ describe("session state", () => {
 
     expect(sortSessions(sessions).map((session) => session.id)).toEqual(["run-2", "run-3", "run-1"]);
     expect(pickInitialSessionId(sessions)).toBe("run-2");
+    expect(adjacentSessionId(sessions, "run-2", "next")).toBe("run-3");
+    expect(adjacentSessionId(sessions, "run-2", "previous")).toBe("run-1");
   });
 
   it("filters sessions for the left nav", () => {

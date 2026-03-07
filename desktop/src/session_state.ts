@@ -183,6 +183,29 @@ export function pickInitialSessionId(sessions: SessionState[]): string | null {
   return sortSessions(sessions)[0]?.id ?? null;
 }
 
+export function adjacentSessionId(
+  sessions: SessionState[],
+  currentId: string | null,
+  direction: "next" | "previous",
+): string | null {
+  const ordered = sortSessions(sessions);
+  if (ordered.length === 0) {
+    return null;
+  }
+
+  if (!currentId) {
+    return ordered[0].id;
+  }
+
+  const index = ordered.findIndex((session) => session.id === currentId);
+  if (index === -1) {
+    return ordered[0].id;
+  }
+
+  const delta = direction === "next" ? 1 : -1;
+  return ordered[(index + delta + ordered.length) % ordered.length]?.id ?? null;
+}
+
 export function titleFromLifecycle(lifecycle: Lifecycle): string {
   switch (lifecycle) {
     case "launching":
