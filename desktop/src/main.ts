@@ -43,138 +43,150 @@ if (!app) {
 }
 
 app.innerHTML = `
-  <main class="shell">
-    <section class="hero">
-      <div>
-        <p class="eyebrow">Desktop Monitor</p>
-        <h1>agent_top</h1>
-        <p class="summary">Browse persisted sessions from a left nav, inspect one run at a time, and keep live updates attached to the selected thread instead of stacking endless cards.</p>
+  <main class="app-shell">
+    <aside id="sidebarRail" class="sidebar-rail" data-collapsed="false">
+      <div class="rail-header">
+        <div class="rail-brand">
+          <p class="eyebrow">Desktop Monitor</p>
+          <h1 class="rail-title">agent_top</h1>
+        </div>
+        <button id="sidebarToggleButton" class="ghost rail-toggle" type="button" aria-label="Toggle sidebar">Collapse</button>
       </div>
-      <div class="hero-meta">
-        <div class="meta-card"><span>Active Runs</span><strong id="activeRuns">0</strong></div>
-        <div class="meta-card"><span>Total Runs</span><strong id="totalRuns">0</strong></div>
-        <div class="meta-card"><span>Total Events</span><strong id="totalEvents">0</strong></div>
-        <div class="meta-card"><span>Total Warnings</span><strong id="totalWarnings">0</strong></div>
-      </div>
-    </section>
 
-    <section class="workspace-bar panel">
-      <div>
-        <p class="panel-kicker">Workspace</p>
-        <strong id="workspaceLabel">Loading...</strong>
-      </div>
-      <div class="workspace-actions">
-        <button id="chooseFolderButton" class="ghost">Choose Folder</button>
-        <button id="addRunButton" class="primary">Start Run</button>
-      </div>
-    </section>
-
-    <section id="errorBanner" class="error-banner hidden" role="alert"></section>
-
-    <section class="grid">
-      <section class="panel composer-panel">
-        <header class="panel-header">
-          <h2>Composer</h2>
-          <p>Launch new runs with the same validated controls. Active sessions immediately appear in the left nav.</p>
-        </header>
-        <label class="field">
-          <span>Prompt</span>
-          <textarea id="promptInput" rows="6" placeholder="Describe the task for Codex."></textarea>
+      <div class="rail-search-wrap">
+        <label class="field rail-search-field">
+          <span>Search Sessions</span>
+          <input id="navSearchInput" type="text" placeholder="Search title, prompt, workspace, latest" />
         </label>
-        <div class="quick-actions">
-          <button id="statusButton" class="ghost">Run /status</button>
+      </div>
+
+      <div id="sessionNav" class="session-nav"></div>
+
+      <div class="rail-footer">
+        <p>Shortcuts</p>
+        <p>[ / ] cycle sessions</p>
+      </div>
+    </aside>
+
+    <div class="shell-separator"></div>
+
+    <section class="content-shell">
+      <section class="hero">
+        <div>
+          <p class="eyebrow">Session Workspace</p>
+          <h1>agent_top</h1>
+          <p class="summary">Use the left rail like a real session navigator: collapse it when you want more room, expand it when you want context, and keep the selected session as the primary workspace.</p>
         </div>
-        <div class="settings-grid">
-          <label class="field">
-            <span>Model</span>
-            <input id="modelInput" type="text" placeholder="default" />
-          </label>
-          <label class="field">
-            <span>Sandbox</span>
-            <select id="sandboxInput">
-              <option value="read-only">read-only</option>
-              <option value="workspace-write">workspace-write</option>
-              <option value="danger-full-access">danger-full-access</option>
-            </select>
-          </label>
-          <label class="field">
-            <span>Approval</span>
-            <select id="approvalInput">
-              <option value="untrusted">untrusted</option>
-              <option value="on-request">on-request</option>
-              <option value="never">never</option>
-            </select>
-          </label>
+        <div class="hero-meta">
+          <div class="meta-card"><span>Active Runs</span><strong id="activeRuns">0</strong></div>
+          <div class="meta-card"><span>Total Runs</span><strong id="totalRuns">0</strong></div>
+          <div class="meta-card"><span>Total Events</span><strong id="totalEvents">0</strong></div>
+          <div class="meta-card"><span>Total Warnings</span><strong id="totalWarnings">0</strong></div>
         </div>
-        <p id="composerMessage" class="run-message">Ready.</p>
       </section>
 
-      <section class="panel browser-panel">
-        <div class="browser-layout">
-          <aside class="session-sidebar">
-            <header class="panel-header sidebar-header">
-              <div>
-                <h2>Sessions</h2>
-                <p>Cycle between persisted runs from here.</p>
-              </div>
-            </header>
-            <label class="field">
-              <span>Search Sessions</span>
-              <input id="navSearchInput" type="text" placeholder="Search title, prompt, workspace, latest" />
-            </label>
-            <div id="sessionNav" class="session-nav"></div>
-          </aside>
-
-          <section class="session-detail">
-            <header class="detail-header">
-              <div>
-                <p class="panel-kicker">Selected Session</p>
-                <h2 id="detailTitle">No session selected</h2>
-                <p id="detailSubtitle" class="detail-subtitle">Choose a session from the left nav.</p>
-              </div>
-              <div class="detail-actions">
-                <button id="previousSessionButton" class="ghost">Previous</button>
-                <button id="nextSessionButton" class="ghost">Next</button>
-                <button id="cancelRunButton" class="ghost">Cancel</button>
-                <button id="retryRunButton" class="ghost">Retry</button>
-              </div>
-            </header>
-
-            <div class="detail-meta" id="detailMeta">
-              <div class="meta-pill"><span>Status</span><strong id="detailStatus">-</strong></div>
-              <div class="meta-pill"><span>Events</span><strong id="detailEvents">0</strong></div>
-              <div class="meta-pill"><span>Commands</span><strong id="detailCommands">0</strong></div>
-              <div class="meta-pill"><span>Warnings</span><strong id="detailWarnings">0</strong></div>
-            </div>
-
-            <div class="detail-copy">
-              <p id="detailWorkspace" class="detail-workspace"></p>
-              <p id="detailPrompt" class="detail-prompt"></p>
-              <p id="detailLatest" class="detail-latest"></p>
-            </div>
-
-            <div class="session-filters">
-              <input id="eventSearchInput" type="text" placeholder="Search events in the selected session" />
-              <select id="kindFilter">
-                <option value="all">All kinds</option>
-                <option value="status">Status</option>
-                <option value="command">Command</option>
-                <option value="file">File</option>
-                <option value="warning">Warning</option>
-                <option value="error">Error</option>
-                <option value="note">Note</option>
-              </select>
-            </div>
-
-            <p id="detailMessage" class="run-message">Session details load on demand.</p>
-            <ul id="detailEventsList" class="detail-events"></ul>
-          </section>
+      <section class="workspace-bar panel">
+        <div>
+          <p class="panel-kicker">Workspace</p>
+          <strong id="workspaceLabel">Loading...</strong>
         </div>
+        <div class="workspace-actions">
+          <button id="chooseFolderButton" class="ghost">Choose Folder</button>
+          <button id="addRunButton" class="primary">Start Run</button>
+        </div>
+      </section>
+
+      <section id="errorBanner" class="error-banner hidden" role="alert"></section>
+
+      <section class="content-grid">
+        <section class="panel composer-panel">
+          <header class="panel-header">
+            <h2>Composer</h2>
+            <p>Launch new runs with the same validated controls. New sessions appear in the left rail immediately.</p>
+          </header>
+          <label class="field">
+            <span>Prompt</span>
+            <textarea id="promptInput" rows="6" placeholder="Describe the task for Codex."></textarea>
+          </label>
+          <div class="quick-actions">
+            <button id="statusButton" class="ghost">Run /status</button>
+          </div>
+          <div class="settings-grid">
+            <label class="field">
+              <span>Model</span>
+              <input id="modelInput" type="text" placeholder="default" />
+            </label>
+            <label class="field">
+              <span>Sandbox</span>
+              <select id="sandboxInput">
+                <option value="read-only">read-only</option>
+                <option value="workspace-write">workspace-write</option>
+                <option value="danger-full-access">danger-full-access</option>
+              </select>
+            </label>
+            <label class="field">
+              <span>Approval</span>
+              <select id="approvalInput">
+                <option value="untrusted">untrusted</option>
+                <option value="on-request">on-request</option>
+                <option value="never">never</option>
+              </select>
+            </label>
+          </div>
+          <p id="composerMessage" class="run-message">Ready.</p>
+        </section>
+
+        <section class="panel detail-panel">
+          <header class="detail-header">
+            <div>
+              <p class="panel-kicker">Selected Session</p>
+              <h2 id="detailTitle">No session selected</h2>
+              <p id="detailSubtitle" class="detail-subtitle">Choose a session from the left rail.</p>
+            </div>
+            <div class="detail-actions">
+              <button id="previousSessionButton" class="ghost">Previous</button>
+              <button id="nextSessionButton" class="ghost">Next</button>
+              <button id="cancelRunButton" class="ghost">Cancel</button>
+              <button id="retryRunButton" class="ghost">Retry</button>
+            </div>
+          </header>
+
+          <div class="detail-meta">
+            <div class="meta-pill"><span>Status</span><strong id="detailStatus">-</strong></div>
+            <div class="meta-pill"><span>Events</span><strong id="detailEvents">0</strong></div>
+            <div class="meta-pill"><span>Commands</span><strong id="detailCommands">0</strong></div>
+            <div class="meta-pill"><span>Warnings</span><strong id="detailWarnings">0</strong></div>
+          </div>
+
+          <div class="detail-copy">
+            <p id="detailWorkspace" class="detail-workspace"></p>
+            <p id="detailPrompt" class="detail-prompt"></p>
+            <p id="detailLatest" class="detail-latest"></p>
+          </div>
+
+          <div class="session-filters">
+            <input id="eventSearchInput" type="text" placeholder="Search events in the selected session" />
+            <select id="kindFilter">
+              <option value="all">All kinds</option>
+              <option value="status">Status</option>
+              <option value="command">Command</option>
+              <option value="file">File</option>
+              <option value="warning">Warning</option>
+              <option value="error">Error</option>
+              <option value="note">Note</option>
+            </select>
+          </div>
+
+          <p id="detailMessage" class="run-message">Session details load on demand.</p>
+          <ul id="detailEventsList" class="detail-events"></ul>
+        </section>
       </section>
     </section>
   </main>
 `;
 
+const sidebarRail = document.querySelector<HTMLElement>("#sidebarRail")!;
+const sidebarToggleButton = document.querySelector<HTMLButtonElement>("#sidebarToggleButton")!;
 const workspaceLabel = document.querySelector<HTMLElement>("#workspaceLabel")!;
 const activeRuns = document.querySelector<HTMLElement>("#activeRuns")!;
 const totalRuns = document.querySelector<HTMLElement>("#totalRuns")!;
@@ -213,6 +225,7 @@ let currentWorkspace = "";
 let loading = true;
 let loadingDetail = false;
 let selectedSessionId: string | null = null;
+let sidebarCollapsed = false;
 const sessions = new Map<string, SessionState>();
 let navSearch = "";
 let eventFilter: SessionFilter = { query: "", kind: "all" };
@@ -255,6 +268,11 @@ function setLoadingState(isLoading: boolean) {
   statusButton.disabled = isLoading;
 }
 
+function renderSidebarState() {
+  sidebarRail.dataset.collapsed = String(sidebarCollapsed);
+  sidebarToggleButton.textContent = sidebarCollapsed ? "Expand" : "Collapse";
+}
+
 function upsertSession(summary: SessionListItem) {
   const existing = sessions.get(summary.session_id);
   sessions.set(
@@ -275,6 +293,11 @@ function ensureSelection() {
   selectedSessionId = pickInitialSessionId([...sessions.values()]);
 }
 
+function compactSessionLabel(session: SessionState): string {
+  const first = session.title.trim().charAt(0) || session.id.charAt(0);
+  return first.toUpperCase();
+}
+
 function renderSessionNav() {
   const visible = sortedVisibleSessions();
   sessionNav.replaceChildren(
@@ -287,22 +310,35 @@ function renderSessionNav() {
             button.dataset.active = "true";
           }
 
-          button.innerHTML = `
-            <span class="session-nav-title"></span>
-            <span class="session-nav-status">${titleFromLifecycle(session.lifecycle)}</span>
-            <span class="session-nav-meta"></span>
-            <span class="session-nav-latest"></span>
-          `;
-          button.querySelector<HTMLElement>(".session-nav-title")!.textContent = session.title;
-          button.querySelector<HTMLElement>(".session-nav-meta")!.textContent =
-            `${session.totalEvents} events | ${session.workspace}`;
-          button.querySelector<HTMLElement>(".session-nav-latest")!.textContent = session.latestMessage;
+          if (sidebarCollapsed) {
+            button.innerHTML = `
+              <span class="session-nav-compact">${compactSessionLabel(session)}</span>
+            `;
+            button.title = `${session.title}\n${session.latestMessage}`;
+          } else {
+            button.innerHTML = `
+              <span class="session-nav-title"></span>
+              <span class="session-nav-status">${titleFromLifecycle(session.lifecycle)}</span>
+              <span class="session-nav-meta"></span>
+              <span class="session-nav-latest"></span>
+            `;
+            button.querySelector<HTMLElement>(".session-nav-title")!.textContent = session.title;
+            button.querySelector<HTMLElement>(".session-nav-meta")!.textContent =
+              `${session.totalEvents} events | ${session.workspace}`;
+            button.querySelector<HTMLElement>(".session-nav-latest")!.textContent = session.latestMessage;
+          }
+
           button.addEventListener("click", async () => {
             await selectSession(session.id);
           });
           return button;
         })
-      : [Object.assign(document.createElement("p"), { className: "empty-sessions", textContent: "No sessions match the current search." })]),
+      : [
+          Object.assign(document.createElement(sidebarCollapsed ? "span" : "p"), {
+            className: "empty-sessions",
+            textContent: sidebarCollapsed ? "0" : "No sessions match the current search.",
+          }),
+        ]),
   );
 }
 
@@ -311,7 +347,7 @@ function renderSelectedSession() {
 
   if (!session) {
     detailTitle.textContent = "No session selected";
-    detailSubtitle.textContent = "Choose a session from the left nav.";
+    detailSubtitle.textContent = "Choose a session from the left rail.";
     detailStatus.textContent = "-";
     detailEvents.textContent = "0";
     detailCommands.textContent = "0";
@@ -368,6 +404,7 @@ function renderSelectedSession() {
 
 function renderAll() {
   ensureSelection();
+  renderSidebarState();
   renderSessionNav();
   renderSelectedSession();
   updateHeroStats();
@@ -495,6 +532,11 @@ async function bootstrap() {
   setLoadingState(false);
 }
 
+sidebarToggleButton.addEventListener("click", () => {
+  sidebarCollapsed = !sidebarCollapsed;
+  renderAll();
+});
+
 chooseFolderButton.addEventListener("click", async () => {
   if (loading) {
     return;
@@ -584,6 +626,12 @@ window.addEventListener("keydown", async (event) => {
     return;
   }
 
+  if (event.key === "\\" && (event.ctrlKey || event.metaKey)) {
+    event.preventDefault();
+    sidebarCollapsed = !sidebarCollapsed;
+    renderAll();
+  }
+
   if (event.key === "[" || event.key === "ArrowUp") {
     event.preventDefault();
     await stepSelectedSession("previous");
@@ -610,6 +658,8 @@ listen<AgentEvent>("agent-event", async (event) => {
 
   renderAll();
 });
+
+renderSidebarState();
 
 bootstrap().catch((error) => {
   setError(error instanceof Error ? error.message : String(error));
