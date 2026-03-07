@@ -34,6 +34,13 @@ cargo run -- replay sample\session.log
 cargo run -- run "Reply with the single word ready"
 ```
 
+Desktop shell:
+
+```powershell
+cd desktop
+npm run tauri dev
+```
+
 ## Phase 2: Medium
 
 Planned scope:

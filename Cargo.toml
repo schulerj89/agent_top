@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [workspace]
-members = ["crates/agent_top_core"]
+members = ["crates/agent_top_core", "desktop/src-tauri"]
 
 [dependencies]
 agent_top_core = { path = "crates/agent_top_core" }
