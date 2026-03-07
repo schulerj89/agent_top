@@ -163,7 +163,7 @@ fn pick_workspace(app: AppHandle) -> Option<String> {
     app.dialog()
         .file()
         .blocking_pick_folder()
-        .map(|path| path.to_string())
+        .map(|path| normalize_workspace_display(&path.to_string()))
 }
 
 #[tauri::command]
@@ -173,6 +173,7 @@ fn start_run(
     request: RunRequestPayload,
 ) -> Result<StartRunResponse, String> {
     validate_request(&request)?;
+    let workspace = normalize_workspace_display(&request.workspace);
     let session_id = format!(
         "run-{}",
         state.next_session_id.fetch_add(1, Ordering::Relaxed)
@@ -186,7 +187,7 @@ fn start_run(
     state.store.create_session(&CreateSessionInput {
         id: session_id.clone(),
         prompt: request.prompt.clone(),
-        workspace: request.workspace.clone(),
+        workspace: workspace.clone(),
         lifecycle: SessionLifecycle::Launching,
         status: "Launching".to_string(),
         settings: settings.clone(),
@@ -195,7 +196,7 @@ fn start_run(
     let managed = start_codex_run(RunRequest {
         session_id: session_id.clone(),
         prompt: request.prompt,
-        workspace: request.workspace,
+        workspace,
         settings,
     });
 
@@ -300,7 +301,7 @@ impl From<StoredSession> for SessionListItem {
             session_id: value.id,
             title: value.title,
             prompt: value.prompt,
-            workspace: value.workspace,
+            workspace: normalize_workspace_display(&value.workspace),
             lifecycle: lifecycle_label(value.lifecycle).to_string(),
             status: value.status,
             updated_at: value.updated_at.to_string(),
@@ -406,7 +407,17 @@ fn detect_workspace() -> String {
         .canonicalize()
         .unwrap_or(candidate)
         .to_string_lossy()
-        .into_owned()
+        .pipe(|path| normalize_workspace_display(&path))
+}
+
+fn normalize_workspace_display(path: &str) -> String {
+    if let Some(stripped) = path.strip_prefix(r"\\?\UNC\") {
+        return format!(r"\\{stripped}");
+    }
+
+    path.strip_prefix(r"\\?\")
+        .unwrap_or(path)
+        .to_string()
 }
 
 fn persist_runner_update(
@@ -641,6 +652,22 @@ mod tests {
         assert_eq!(item.lifecycle, "running");
         assert_eq!(item.total_events, 4);
         assert_eq!(item.error_count, 1);
+    }
+
+    #[test]
+    fn normalizes_windows_workspace_prefixes() {
+        assert_eq!(
+            normalize_workspace_display(r"\\?\C:\Users\joshs\Projects\agent_top"),
+            r"C:\Users\joshs\Projects\agent_top"
+        );
+        assert_eq!(
+            normalize_workspace_display(r"\\?\UNC\server\share\repo"),
+            r"\\server\share\repo"
+        );
+        assert_eq!(
+            normalize_workspace_display(r"C:\Users\joshs\Projects\agent_top"),
+            r"C:\Users\joshs\Projects\agent_top"
+        );
     }
 
 }
