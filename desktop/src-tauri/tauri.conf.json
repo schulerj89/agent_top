@@ -13,8 +13,8 @@
     "windows": [
       {
         "title": "agent_top",
-        "width": 800,
-        "height": 600,
+        "width": 1440,
+        "height": 920,
         "resizable": true,
         "fullscreen": false
       }

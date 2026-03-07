@@ -108,9 +108,6 @@ app.innerHTML = `
             <span>Prompt</span>
             <textarea id="promptInput" rows="6" placeholder="Describe the task for Codex."></textarea>
           </label>
-          <div class="quick-actions">
-            <button id="statusButton" class="ghost">Run /status</button>
-          </div>
           <div class="settings-grid">
             <label class="field">
               <span>Model</span>
@@ -198,7 +195,6 @@ const sandboxInput = document.querySelector<HTMLSelectElement>("#sandboxInput")!
 const approvalInput = document.querySelector<HTMLSelectElement>("#approvalInput")!;
 const chooseFolderButton = document.querySelector<HTMLButtonElement>("#chooseFolderButton")!;
 const addRunButton = document.querySelector<HTMLButtonElement>("#addRunButton")!;
-const statusButton = document.querySelector<HTMLButtonElement>("#statusButton")!;
 const composerMessage = document.querySelector<HTMLElement>("#composerMessage")!;
 const errorBanner = document.querySelector<HTMLElement>("#errorBanner")!;
 const navSearchInput = document.querySelector<HTMLInputElement>("#navSearchInput")!;
@@ -265,7 +261,6 @@ function setLoadingState(isLoading: boolean) {
   loading = isLoading;
   chooseFolderButton.disabled = isLoading;
   addRunButton.disabled = isLoading;
-  statusButton.disabled = isLoading;
 }
 
 function renderSidebarState() {
@@ -556,10 +551,6 @@ chooseFolderButton.addEventListener("click", async () => {
 
 addRunButton.addEventListener("click", async () => {
   await startRun(promptInput.value);
-});
-
-statusButton.addEventListener("click", async () => {
-  await startRun("/status");
 });
 
 navSearchInput.addEventListener("input", () => {
