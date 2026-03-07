@@ -320,6 +320,15 @@ impl SessionStore {
             .map_err(|error| error.to_string())
     }
 
+    pub fn delete_session(&self, session_id: &str) -> Result<bool, String> {
+        let deleted = self
+            .open()?
+            .execute("delete from sessions where id = ?1", [session_id])
+            .map_err(|error| error.to_string())?;
+
+        Ok(deleted > 0)
+    }
+
     fn open(&self) -> Result<Connection, String> {
         Connection::open(&self.path).map_err(|error| error.to_string())
     }
@@ -578,5 +587,29 @@ mod tests {
         let store = SessionStore::new(dir.path());
         let error = store.init().expect_err("directory path should fail");
         assert!(!error.is_empty());
+    }
+
+    #[test]
+    fn deletes_sessions_and_cascades_events() {
+        let (_dir, store) = store();
+        store
+            .create_session(&CreateSessionInput {
+                id: "run-1".to_string(),
+                prompt: "prompt".to_string(),
+                workspace: "c:/repo".to_string(),
+                lifecycle: SessionLifecycle::Running,
+                status: "Running".to_string(),
+                settings: test_settings(),
+            })
+            .expect("create session");
+
+        store
+            .append_event("run-1", &Event::new("1", EventKind::Note, "hello"), None)
+            .expect("append event");
+
+        assert!(store.delete_session("run-1").expect("delete session"));
+        assert!(store.get_session("run-1").expect("load session").is_none());
+        assert!(store.list_events("run-1", None).expect("load events").is_empty());
+        assert!(!store.delete_session("run-1").expect("delete missing session"));
     }
 }

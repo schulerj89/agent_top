@@ -62,15 +62,6 @@ select:disabled {
   overflow: hidden;
 }
 
-.sidebar-rail[data-collapsed="true"] {
-  --sidebar-width: 88px;
-  padding-inline: 12px;
-}
-
-.sidebar-rail[data-collapsed="false"] {
-  --sidebar-width: 320px;
-}
-
 .shell-separator {
   background: linear-gradient(180deg, rgba(255, 255, 255, 0.06), rgba(255, 255, 255, 0.12), rgba(255, 255, 255, 0.06));
 }
@@ -95,22 +86,6 @@ select:disabled {
   font-size: 2rem;
   line-height: 1;
   letter-spacing: -0.06em;
-}
-
-.rail-toggle {
-  padding-inline: 16px;
-  white-space: nowrap;
-}
-
-.sidebar-rail[data-collapsed="true"] .rail-brand,
-.sidebar-rail[data-collapsed="true"] .rail-search-wrap,
-.sidebar-rail[data-collapsed="true"] .rail-footer {
-  display: none;
-}
-
-.sidebar-rail[data-collapsed="true"] .rail-toggle {
-  width: 100%;
-  padding-inline: 0;
 }
 
 .hero {
@@ -355,26 +330,10 @@ p {
   color: #96a0af;
 }
 
-.session-nav-compact {
-  display: grid;
-  place-items: center;
-  width: 100%;
-  aspect-ratio: 1;
-  min-height: 32px;
-  border-radius: 10px;
-  font-weight: 800;
-  font-size: 0.95rem;
-}
-
 .session-nav-item[data-running="true"] .session-nav-title,
-.session-nav-item[data-running="true"] .session-nav-compact {
+.session-nav-item[data-running="true"] {
   color: #f2b45d;
   animation: sessionPulse 1.35s ease-in-out infinite;
-}
-
-.sidebar-rail[data-collapsed="true"] .session-nav-item {
-  padding: 0;
-  border-left: 0;
 }
 
 .empty-sessions {
@@ -535,22 +494,14 @@ p {
     grid-template-columns: 1fr;
   }
 
-  .shell-separator,
-  .sidebar-rail[data-collapsed="true"] .rail-toggle {
+  .shell-separator {
     display: none;
   }
 
-  .sidebar-rail,
-  .sidebar-rail[data-collapsed="true"] {
+  .sidebar-rail {
     --sidebar-width: auto;
     grid-template-rows: auto auto minmax(120px, auto) auto;
     padding: 18px 20px 16px;
-  }
-
-  .sidebar-rail[data-collapsed="true"] .rail-brand,
-  .sidebar-rail[data-collapsed="true"] .rail-search-wrap,
-  .sidebar-rail[data-collapsed="true"] .rail-footer {
-    display: block;
   }
 
   .content-shell {

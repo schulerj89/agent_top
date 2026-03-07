@@ -51,6 +51,11 @@ struct CancelRunRequest {
     session_id: String,
 }
 
+#[derive(Serialize)]
+struct DeleteSessionResponse {
+    deleted: bool,
+}
+
 #[derive(Deserialize)]
 struct SessionLookupRequest {
     session_id: String,
@@ -250,6 +255,20 @@ fn retry_run(
     Ok(StartRunResponse { session_id })
 }
 
+#[tauri::command]
+fn delete_session(
+    state: State<'_, AppState>,
+    request: CancelRunRequest,
+) -> Result<DeleteSessionResponse, String> {
+    if has_active_run(state.inner(), &request.session_id)? {
+        return Err("session is still running".to_string());
+    }
+
+    Ok(DeleteSessionResponse {
+        deleted: state.store.delete_session(&request.session_id)?,
+    })
+}
+
 impl Default for SettingsPayload {
     fn default() -> Self {
         Self {
@@ -344,6 +363,14 @@ fn register_run(
         .map_err(|_| "active run state is unavailable".to_string())?;
     guard.insert(session_id.to_string(), controller);
     Ok(())
+}
+
+fn has_active_run(state: &AppState, session_id: &str) -> Result<bool, String> {
+    let guard = state
+        .active_runs
+        .lock()
+        .map_err(|_| "active run state is unavailable".to_string())?;
+    Ok(guard.contains_key(session_id))
 }
 
 fn forward_events(app: AppHandle, store: SessionStore, session_id: String, managed: ManagedRun) {
@@ -492,7 +519,8 @@ pub fn run() {
             pick_workspace,
             start_run,
             cancel_run,
-            retry_run
+            retry_run,
+            delete_session
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
@@ -614,4 +642,5 @@ mod tests {
         assert_eq!(item.total_events, 4);
         assert_eq!(item.error_count, 1);
     }
+
 }

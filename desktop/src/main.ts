@@ -38,6 +38,10 @@ type StartRunResponse = {
   session_id: string;
 };
 
+type DeleteSessionResponse = {
+  deleted: boolean;
+};
+
 const app = document.querySelector<HTMLDivElement>("#app");
 if (!app) {
   throw new Error("app root not found");
@@ -45,13 +49,12 @@ if (!app) {
 
 app.innerHTML = `
   <main class="app-shell">
-    <aside id="sidebarRail" class="sidebar-rail" data-collapsed="false">
+    <aside id="sidebarRail" class="sidebar-rail">
       <div class="rail-header">
         <div class="rail-brand">
           <p class="eyebrow">Desktop Monitor</p>
           <h1 class="rail-title">Agent Top</h1>
         </div>
-        <button id="sidebarToggleButton" class="ghost rail-toggle" type="button" aria-label="Toggle sidebar">Collapse</button>
       </div>
 
       <div class="rail-search-wrap">
@@ -76,7 +79,7 @@ app.innerHTML = `
         <div>
           <p class="eyebrow">Session Workspace</p>
           <h1>Agent Top</h1>
-          <p class="summary">Use the left rail like a real session navigator: collapse it when you want more room, expand it when you want context, and keep the selected session as the primary workspace.</p>
+          <p class="summary">Use the left rail like a real session navigator, keep the selected session as the primary workspace, and prune completed runs when you no longer need them.</p>
         </div>
         <div class="hero-meta">
           <div class="meta-card"><span>Active Runs</span><strong id="activeRuns">0</strong></div>
@@ -146,6 +149,7 @@ app.innerHTML = `
               <button id="nextSessionButton" class="ghost">Next</button>
               <button id="cancelRunButton" class="ghost">Cancel</button>
               <button id="retryRunButton" class="ghost">Retry</button>
+              <button id="deleteSessionButton" class="ghost">Delete</button>
             </div>
           </header>
 
@@ -183,8 +187,6 @@ app.innerHTML = `
   </main>
 `;
 
-const sidebarRail = document.querySelector<HTMLElement>("#sidebarRail")!;
-const sidebarToggleButton = document.querySelector<HTMLButtonElement>("#sidebarToggleButton")!;
 const workspaceLabel = document.querySelector<HTMLElement>("#workspaceLabel")!;
 const activeRuns = document.querySelector<HTMLElement>("#activeRuns")!;
 const totalRuns = document.querySelector<HTMLElement>("#totalRuns")!;
@@ -214,6 +216,7 @@ const previousSessionButton = document.querySelector<HTMLButtonElement>("#previo
 const nextSessionButton = document.querySelector<HTMLButtonElement>("#nextSessionButton")!;
 const cancelRunButton = document.querySelector<HTMLButtonElement>("#cancelRunButton")!;
 const retryRunButton = document.querySelector<HTMLButtonElement>("#retryRunButton")!;
+const deleteSessionButton = document.querySelector<HTMLButtonElement>("#deleteSessionButton")!;
 const eventSearchInput = document.querySelector<HTMLInputElement>("#eventSearchInput")!;
 const kindFilter = document.querySelector<HTMLSelectElement>("#kindFilter")!;
 const detailEventsList = document.querySelector<HTMLUListElement>("#detailEventsList")!;
@@ -222,7 +225,6 @@ let currentWorkspace = "";
 let loading = true;
 let loadingDetail = false;
 let selectedSessionId: string | null = null;
-let sidebarCollapsed = false;
 const sessions = new Map<string, SessionState>();
 let navSearch = "";
 let eventFilter: SessionFilter = { query: "", kind: "all" };
@@ -275,11 +277,6 @@ function applyComposerState(workspace: string, prompt: string, settings: Session
   approvalInput.value = settings.approval;
 }
 
-function renderSidebarState() {
-  sidebarRail.dataset.collapsed = String(sidebarCollapsed);
-  sidebarToggleButton.textContent = sidebarCollapsed ? "Expand" : "Collapse";
-}
-
 function upsertSession(summary: SessionListItem) {
   const existing = sessions.get(summary.session_id);
   sessions.set(
@@ -298,11 +295,6 @@ function ensureSelection() {
   }
 
   selectedSessionId = pickInitialSessionId([...sessions.values()]);
-}
-
-function compactSessionLabel(session: SessionState): string {
-  const first = promptTitle(session.prompt).charAt(0) || session.id.charAt(0);
-  return first.toUpperCase();
 }
 
 function promptTitle(prompt: string): string {
@@ -324,18 +316,11 @@ function renderSessionNav() {
           if (session.id === selectedSessionId) {
             button.dataset.active = "true";
           }
-
-          if (sidebarCollapsed) {
-            button.innerHTML = `
-              <span class="session-nav-compact">${compactSessionLabel(session)}</span>
-            `;
-            button.title = navTitle;
-          } else {
-            button.innerHTML = `
-              <span class="session-nav-title"></span>
-            `;
-            button.querySelector<HTMLElement>(".session-nav-title")!.textContent = navTitle;
-          }
+          button.title = navTitle;
+          button.innerHTML = `
+            <span class="session-nav-title"></span>
+          `;
+          button.querySelector<HTMLElement>(".session-nav-title")!.textContent = navTitle;
 
           button.addEventListener("click", async () => {
             await selectSession(session.id);
@@ -343,9 +328,9 @@ function renderSessionNav() {
           return button;
         })
       : [
-          Object.assign(document.createElement(sidebarCollapsed ? "span" : "p"), {
+          Object.assign(document.createElement("p"), {
             className: "empty-sessions",
-            textContent: sidebarCollapsed ? "0" : "No sessions match the current search.",
+            textContent: "No sessions match the current search.",
           }),
         ]),
   );
@@ -371,6 +356,7 @@ function renderSelectedSession() {
     nextSessionButton.disabled = true;
     cancelRunButton.disabled = true;
     retryRunButton.disabled = true;
+    deleteSessionButton.disabled = true;
     return;
   }
 
@@ -393,6 +379,7 @@ function renderSelectedSession() {
   nextSessionButton.disabled = ordered.length < 2;
   cancelRunButton.disabled = !session.running;
   retryRunButton.disabled = session.running;
+  deleteSessionButton.disabled = session.running;
 
   const visibleEvents = session.eventsLoaded ? filterSessionEvents(session, eventFilter).slice(-100).reverse() : [];
   detailEventsList.replaceChildren(
@@ -414,7 +401,6 @@ function renderSelectedSession() {
 
 function renderAll() {
   ensureSelection();
-  renderSidebarState();
   renderSessionNav();
   renderSelectedSession();
   updateHeroStats();
@@ -468,6 +454,44 @@ async function stepSelectedSession(direction: "next" | "previous") {
   }
 
   await selectSession(nextId);
+}
+
+async function deleteSelectedSession() {
+  if (!selectedSessionId) {
+    return;
+  }
+
+  const sessionId = selectedSessionId;
+  const session = sessions.get(sessionId);
+  if (!session || session.running) {
+    setComposerMessage("Stop the run before deleting the session.");
+    return;
+  }
+
+  const confirmed = window.confirm(`Delete session "${promptTitle(session.prompt)}"?`);
+  if (!confirmed) {
+    return;
+  }
+
+  await runGuarded(async () => {
+    const response = await invoke<DeleteSessionResponse>("delete_session", {
+      request: { session_id: sessionId },
+    });
+    if (!response.deleted) {
+      throw new Error("session history entry was not found");
+    }
+
+    sessions.delete(sessionId);
+    selectedSessionId = pickInitialSessionId([...sessions.values()]);
+    renderAll();
+    if (selectedSessionId) {
+      await selectSession(selectedSessionId);
+    } else {
+      applyComposerState(defaultWorkspace, "", defaultSettings);
+      renderAll();
+    }
+    setComposerMessage(`Deleted ${sessionId}.`);
+  }, "Unable to delete session.");
 }
 
 async function startRun(prompt: string) {
@@ -544,11 +568,6 @@ async function bootstrap() {
   setLoadingState(false);
 }
 
-sidebarToggleButton.addEventListener("click", () => {
-  sidebarCollapsed = !sidebarCollapsed;
-  renderAll();
-});
-
 chooseFolderButton.addEventListener("click", async () => {
   if (loading) {
     return;
@@ -621,6 +640,10 @@ retryRunButton.addEventListener("click", async () => {
   }, "Unable to retry run.");
 });
 
+deleteSessionButton.addEventListener("click", async () => {
+  await deleteSelectedSession();
+});
+
 previousSessionButton.addEventListener("click", async () => {
   await stepSelectedSession("previous");
 });
@@ -633,12 +656,6 @@ window.addEventListener("keydown", async (event) => {
   const target = event.target;
   if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement || target instanceof HTMLSelectElement) {
     return;
-  }
-
-  if (event.key === "\\" && (event.ctrlKey || event.metaKey)) {
-    event.preventDefault();
-    sidebarCollapsed = !sidebarCollapsed;
-    renderAll();
   }
 
   if (event.key === "[" || event.key === "ArrowUp") {
@@ -667,8 +684,6 @@ listen<AgentEvent>("agent-event", async (event) => {
 
   renderAll();
 });
-
-renderSidebarState();
 
 bootstrap().catch((error) => {
   setError(error instanceof Error ? error.message : String(error));
