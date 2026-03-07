@@ -4,7 +4,7 @@
 
 - a shared runner core in Rust
 - a terminal UI for local monitoring
-- a Tauri desktop shell for multi-run workflows
+- a Tauri desktop shell for persistent multi-session workflows
 
 ## Current Features
 
@@ -12,9 +12,13 @@
 - Parse Codex JSONL into normalized session events
 - Monitor sessions in a Rust TUI
 - Launch desktop runs with prompt, workspace, and Codex settings
+- Persist desktop session metadata and event history in SQLite
 - Run multiple desktop sessions in parallel
+- Browse desktop sessions from a left-side session nav
+- Load one selected session into a dedicated detail pane
+- Cancel and retry desktop runs
 - Pick a workspace from a folder dialog in the desktop app
-- Use compact session cards with expandable event feeds
+- Filter session lists and selected-session events
 
 ## Project Layout
 
@@ -26,6 +30,9 @@
 
 - [desktop](/C:/Users/joshs/Projects/agent_top/desktop)  
   Tauri desktop app with a TypeScript frontend and Rust backend bridge.
+
+- [desktop/src-tauri/src/storage.rs](/C:/Users/joshs/Projects/agent_top/desktop/src-tauri/src/storage.rs)  
+  SQLite-backed storage layer for desktop sessions and event history.
 
 ## Terminal App
 
@@ -66,8 +73,15 @@ Desktop workflow:
 - choose a workspace folder
 - enter a prompt or use `/status`
 - launch multiple runs in parallel
-- inspect each run in its own session card
-- expand a card for detailed event history
+- browse sessions from the left nav
+- inspect the selected session in the detail pane
+- filter selected-session events
+- cancel or retry from the detail view
+
+Desktop persistence:
+
+- session metadata and events are stored in a local SQLite database
+- the desktop app restores recent sessions on startup
 
 ## Codex Settings
 
@@ -103,13 +117,15 @@ Sample log:
 Root workspace:
 
 ```powershell
-cargo check
+cargo test --workspace
 ```
 
 Desktop frontend:
 
 ```powershell
 cd desktop
+npm install
+npm test
 npm run build
 ```
 
@@ -122,7 +138,7 @@ cargo check --manifest-path src-tauri\Cargo.toml
 
 ## Next Steps
 
-- persist session history and settings
-- add cancel/stop per session
-- improve file activity and richer analytics
-- add automated tests around runner parsing and desktop session state
+- add richer selected-session analytics in the detail pane
+- improve session-to-session keyboard navigation and bulk session actions
+- clean up the remaining JSON-history compatibility paths
+- expand automated coverage around desktop integration flows
