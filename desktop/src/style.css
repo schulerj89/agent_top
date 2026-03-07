@@ -304,6 +304,7 @@ p {
 
 .session-nav {
   display: grid;
+  align-content: start;
   gap: 0;
   overflow: auto;
   padding-right: 4px;
