@@ -12,7 +12,7 @@ use crossterm::event::{self, Event as CEvent, KeyCode, KeyEventKind, KeyModifier
 use crossterm::execute;
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
 use ratatui::backend::CrosstermBackend;
-use ratatui::layout::{Constraint, Direction, Layout};
+use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph, Wrap};
@@ -39,17 +39,6 @@ impl EventKind {
             "error" => Some(Self::Error),
             "note" => Some(Self::Note),
             _ => None,
-        }
-    }
-
-    fn label(self) -> &'static str {
-        match self {
-            Self::Status => "STATUS",
-            Self::Command => "COMMAND",
-            Self::File => "FILE",
-            Self::Warning => "WARNING",
-            Self::Error => "ERROR",
-            Self::Note => "NOTE",
         }
     }
 }
@@ -392,13 +381,17 @@ fn compact_command(command: &str) -> String {
 }
 
 fn compact_text(text: &str) -> String {
-    const LIMIT: usize = 88;
+    compact_text_to(text, 88)
+}
+
+fn compact_text_to(text: &str, limit: usize) -> String {
     let compact = text.split_whitespace().collect::<Vec<_>>().join(" ");
 
-    if compact.len() <= LIMIT {
+    if compact.len() <= limit {
         compact
     } else {
-        format!("{}...", &compact[..LIMIT - 3])
+        let safe_limit = limit.max(4);
+        format!("{}...", &compact[..safe_limit - 3])
     }
 }
 
@@ -580,43 +573,30 @@ fn init_terminal() -> AppTerminal {
 
 fn render_dashboard(terminal: &mut AppTerminal, summary: &Summary) {
     let _ = terminal.terminal.draw(|frame| {
-        let vertical = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([
-                Constraint::Length(7),
-                Constraint::Min(8),
-                Constraint::Length(10),
-            ])
-            .split(frame.area());
+        let layout = layout_mode(frame.area());
+        let (top, middle) = split_top_middle(frame.area(), layout, false);
 
-        let top = Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([Constraint::Percentage(55), Constraint::Percentage(45)])
-            .split(vertical[0]);
-
-        let middle = Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([Constraint::Percentage(35), Constraint::Percentage(65)])
-            .split(vertical[1]);
-
-        frame.render_widget(render_overview(summary), top[0]);
+        frame.render_widget(render_overview(summary, top[0].width), top[0]);
         frame.render_widget(render_metrics(summary), top[1]);
         frame.render_widget(render_files(summary), middle[0]);
-        frame.render_widget(render_events(summary), middle[1]);
-        frame.render_widget(render_footer(summary), vertical[2]);
+        frame.render_widget(render_events(summary, middle[1].width), middle[1]);
+        frame.render_widget(render_footer(summary, frame.area().width), footer_area(frame.area(), false));
     });
 }
 
-fn render_overview(summary: &Summary) -> Paragraph<'static> {
+fn render_overview(summary: &Summary, width: u16) -> Paragraph<'static> {
     let lines = vec![
         Line::from(vec![
             Span::styled("agent_top", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
             Span::raw("  live session tracker"),
         ]),
-        Line::from(format!("Source: {}", summary.source)),
+        Line::from(format!("Source: {}", compact_text_to(&summary.source, content_limit(width, 18)))),
         Line::from(format!(
             "Status: {}",
-            summary.current_status.as_deref().unwrap_or("unknown")
+            compact_text_to(
+                summary.current_status.as_deref().unwrap_or("unknown"),
+                content_limit(width, 18),
+            )
         )),
     ];
 
@@ -663,48 +643,56 @@ fn render_files(summary: &Summary) -> List<'static> {
     List::new(items).block(Block::default().title("Tracked Files").borders(Borders::ALL))
 }
 
-fn render_events(summary: &Summary) -> List<'static> {
+fn render_events(summary: &Summary, width: u16) -> List<'static> {
     let items = if summary.recent_events.is_empty() {
         vec![ListItem::new(Line::from("(none)"))]
     } else {
         summary
             .recent_events
             .iter()
-            .map(render_event_item)
+            .map(|event| render_event_item(event, width))
             .collect()
     };
 
     List::new(items).block(Block::default().title("Recent Events").borders(Borders::ALL))
 }
 
-fn render_event_item(event: &Event) -> ListItem<'static> {
+fn render_event_item(event: &Event, width: u16) -> ListItem<'static> {
     let style = event_style(event.kind);
+    let timestamp = compact_timestamp(&event.timestamp);
+    let message_limit = content_limit(width, 22);
     let line = Line::from(vec![
         Span::styled(
-            format!("{:<10}", event.timestamp),
+            format!("{:<8}", timestamp),
             Style::default().fg(Color::Gray),
         ),
         Span::styled(
-            format!("{:<8}", event.kind.label()),
+            format!("{:<4}", short_kind_label(event.kind)),
             style.add_modifier(Modifier::BOLD),
         ),
         Span::raw(" "),
-        Span::styled(event.message.clone(), style),
+        Span::styled(compact_text_to(&event.message, message_limit), style),
     ]);
 
     ListItem::new(line)
 }
 
-fn render_footer(summary: &Summary) -> Paragraph<'static> {
+fn render_footer(summary: &Summary, width: u16) -> Paragraph<'static> {
     let last = summary
         .recent_events
         .last()
-        .map(|event| format!("Last event: {} {}", event.kind.label(), event.message))
+        .map(|event| {
+            format!(
+                "Last: {} {}",
+                short_kind_label(event.kind),
+                compact_text_to(&event.message, content_limit(width, 14))
+            )
+        })
         .unwrap_or_else(|| "Last event: none".to_string());
 
     Paragraph::new(vec![
         Line::from(last),
-        Line::from("Press Ctrl+C to exit a live session."),
+        Line::from("Ctrl+C exits."),
     ])
     .block(Block::default().title("Log").borders(Borders::ALL))
     .wrap(Wrap { trim: true })
@@ -886,38 +874,17 @@ fn handle_running_key(app: &mut App, key: KeyCode) {
 
 fn render_app(terminal: &mut AppTerminal, app: &App) {
     let _ = terminal.terminal.draw(|frame| {
-        let vertical = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([
-                Constraint::Length(7),
-                Constraint::Length(9),
-                Constraint::Min(8),
-                Constraint::Length(5),
-            ])
-            .split(frame.area());
+        let layout = layout_mode(frame.area());
+        let (top, middle) = split_top_middle(frame.area(), layout, true);
+        let controls = controls_area(frame.area(), layout);
 
-        let top = Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([Constraint::Percentage(55), Constraint::Percentage(45)])
-            .split(vertical[0]);
-
-        let controls = Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
-            .split(vertical[1]);
-
-        let middle = Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([Constraint::Percentage(35), Constraint::Percentage(65)])
-            .split(vertical[2]);
-
-        frame.render_widget(render_overview(&app.summary), top[0]);
+        frame.render_widget(render_overview(&app.summary, top[0].width), top[0]);
         frame.render_widget(render_metrics(&app.summary), top[1]);
         frame.render_widget(render_launcher(app), controls[0]);
         frame.render_widget(render_settings(app), controls[1]);
         frame.render_widget(render_files(&app.summary), middle[0]);
-        frame.render_widget(render_events(&app.summary), middle[1]);
-        frame.render_widget(render_help(app), vertical[3]);
+        frame.render_widget(render_events(&app.summary, middle[1].width), middle[1]);
+        frame.render_widget(render_help(app), footer_area(frame.area(), true));
     });
 }
 
@@ -932,7 +899,7 @@ fn render_launcher(app: &App) -> Paragraph<'static> {
     let body = match app.mode {
         AppMode::Ready => vec![
             Line::from("Press n to start a new Codex run."),
-            Line::from(format!("Workspace: {}", app.workspace)),
+            Line::from(format!("Workspace: {}", compact_text_to(&app.workspace, 32))),
             Line::from("Press s to edit settings."),
         ],
         AppMode::EditingPrompt => vec![
@@ -1030,6 +997,146 @@ fn selected_setting_mut(settings: &mut RunSettings, field: SettingsField) -> &mu
         SettingsField::Model => &mut settings.model,
         SettingsField::Sandbox => &mut settings.sandbox,
         SettingsField::Approval => &mut settings.approval,
+    }
+}
+
+#[derive(Clone, Copy)]
+enum LayoutMode {
+    Wide,
+    Narrow,
+}
+
+fn layout_mode(area: Rect) -> LayoutMode {
+    if area.width < 140 {
+        LayoutMode::Narrow
+    } else {
+        LayoutMode::Wide
+    }
+}
+
+fn split_top_middle(area: Rect, mode: LayoutMode, has_controls: bool) -> ([Rect; 2], [Rect; 2]) {
+    let base = if has_controls {
+        Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(7),
+                Constraint::Length(9),
+                Constraint::Min(10),
+                Constraint::Length(5),
+            ])
+            .split(area)
+    } else {
+        Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(7),
+                Constraint::Min(10),
+                Constraint::Length(5),
+            ])
+            .split(area)
+    };
+
+    let top_source = base[0];
+    let middle_source = if has_controls { base[2] } else { base[1] };
+
+    let top = match mode {
+        LayoutMode::Wide => Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Percentage(55), Constraint::Percentage(45)])
+            .split(top_source),
+        LayoutMode::Narrow => Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Length(4), Constraint::Length(3)])
+            .split(top_source),
+    };
+
+    let middle = match mode {
+        LayoutMode::Wide => Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Percentage(35), Constraint::Percentage(65)])
+            .split(middle_source),
+        LayoutMode::Narrow => Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Length(6), Constraint::Min(8)])
+            .split(middle_source),
+    };
+
+    ([top[0], top[1]], [middle[0], middle[1]])
+}
+
+fn controls_area(area: Rect, mode: LayoutMode) -> [Rect; 2] {
+    let vertical = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(7),
+            Constraint::Length(9),
+            Constraint::Min(10),
+            Constraint::Length(5),
+        ])
+        .split(area);
+
+    let controls = match mode {
+        LayoutMode::Wide => Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+            .split(vertical[1]),
+        LayoutMode::Narrow => Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Length(4), Constraint::Length(5)])
+            .split(vertical[1]),
+    };
+
+    [controls[0], controls[1]]
+}
+
+fn footer_area(area: Rect, has_controls: bool) -> Rect {
+    let vertical = if has_controls {
+        Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(7),
+                Constraint::Length(9),
+                Constraint::Min(10),
+                Constraint::Length(5),
+            ])
+            .split(area)
+    } else {
+        Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(7),
+                Constraint::Min(10),
+                Constraint::Length(5),
+            ])
+            .split(area)
+    };
+
+    vertical[vertical.len() - 1]
+}
+
+fn content_limit(width: u16, reserved: usize) -> usize {
+    let width = usize::from(width);
+    width.saturating_sub(reserved).max(12)
+}
+
+fn compact_timestamp(timestamp: &str) -> String {
+    if timestamp.len() <= 8 {
+        timestamp.to_string()
+    } else if let Some(time_index) = timestamp.find('T') {
+        timestamp[time_index + 1..].chars().take(8).collect()
+    } else {
+        timestamp.chars().take(8).collect()
+    }
+}
+
+fn short_kind_label(kind: EventKind) -> &'static str {
+    match kind {
+        EventKind::Status => "STAT",
+        EventKind::Command => "CMD",
+        EventKind::File => "FILE",
+        EventKind::Warning => "WARN",
+        EventKind::Error => "ERR",
+        EventKind::Note => "NOTE",
     }
 }
 
