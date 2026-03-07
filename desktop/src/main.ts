@@ -289,8 +289,14 @@ function ensureSelection() {
 }
 
 function compactSessionLabel(session: SessionState): string {
-  const first = session.title.trim().charAt(0) || session.id.charAt(0);
+  const first = promptTitle(session.prompt).charAt(0) || session.id.charAt(0);
   return first.toUpperCase();
+}
+
+function promptTitle(prompt: string): string {
+  const words = prompt.trim().split(/\s+/).filter(Boolean);
+  const short = words.slice(0, 5).join(" ");
+  return short || "Untitled session";
 }
 
 function renderSessionNav() {
@@ -298,9 +304,11 @@ function renderSessionNav() {
   sessionNav.replaceChildren(
     ...(visible.length > 0
       ? visible.map((session) => {
+          const navTitle = promptTitle(session.prompt);
           const button = document.createElement("button");
           button.type = "button";
           button.className = "session-nav-item";
+          button.dataset.running = String(session.running);
           if (session.id === selectedSessionId) {
             button.dataset.active = "true";
           }
@@ -309,18 +317,12 @@ function renderSessionNav() {
             button.innerHTML = `
               <span class="session-nav-compact">${compactSessionLabel(session)}</span>
             `;
-            button.title = `${session.title}\n${session.latestMessage}`;
+            button.title = navTitle;
           } else {
             button.innerHTML = `
               <span class="session-nav-title"></span>
-              <span class="session-nav-status">${titleFromLifecycle(session.lifecycle)}</span>
-              <span class="session-nav-meta"></span>
-              <span class="session-nav-latest"></span>
             `;
-            button.querySelector<HTMLElement>(".session-nav-title")!.textContent = session.title;
-            button.querySelector<HTMLElement>(".session-nav-meta")!.textContent =
-              `${session.totalEvents} events | ${session.workspace}`;
-            button.querySelector<HTMLElement>(".session-nav-latest")!.textContent = session.latestMessage;
+            button.querySelector<HTMLElement>(".session-nav-title")!.textContent = navTitle;
           }
 
           button.addEventListener("click", async () => {
@@ -476,7 +478,7 @@ async function startRun(prompt: string) {
 
     upsertSession({
       session_id: response.session_id,
-      title: trimmedPrompt.length > 48 ? `${trimmedPrompt.slice(0, 45)}...` : trimmedPrompt,
+      title: promptTitle(trimmedPrompt),
       prompt: trimmedPrompt,
       workspace: currentWorkspace,
       lifecycle: "launching",

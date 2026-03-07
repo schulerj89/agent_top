@@ -304,55 +304,46 @@ p {
 
 .session-nav {
   display: grid;
-  gap: 10px;
+  gap: 2px;
   overflow: auto;
   padding-right: 4px;
 }
 
 .session-nav-item {
   display: grid;
-  gap: 8px;
+  align-items: center;
   width: 100%;
-  border-radius: 18px;
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  background: rgba(255, 255, 255, 0.03);
-  padding: 14px;
+  border: 0;
+  border-left: 2px solid transparent;
+  background: transparent;
+  padding: 10px 10px 10px 14px;
   text-align: left;
-  color: #f6f4ef;
+  color: #9ea7b6;
   cursor: pointer;
-  transition: background 140ms ease, border-color 140ms ease, transform 140ms ease;
+  transition: color 140ms ease, border-color 140ms ease, transform 140ms ease;
 }
 
 .session-nav-item:hover {
   transform: translateX(2px);
-  border-color: rgba(255, 255, 255, 0.16);
+  color: #f6f4ef;
 }
 
 .session-nav-item[data-active="true"] {
+  color: #f6f4ef;
   border-color: rgba(242, 180, 93, 0.65);
-  background: rgba(242, 180, 93, 0.1);
 }
 
 .session-nav-title {
+  display: block;
   font-weight: 700;
+  line-height: 1.35;
 }
 
-.session-nav-status,
-.session-nav-meta,
-.session-nav-latest,
 .detail-workspace {
   font-family: "IBM Plex Mono", "Cascadia Code", monospace;
   font-size: 0.82rem;
 }
 
-.session-nav-status {
-  color: #f2b45d;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-}
-
-.session-nav-meta,
-.session-nav-latest,
 .detail-subtitle,
 .detail-latest,
 .detail-prompt,
@@ -366,15 +357,20 @@ p {
   place-items: center;
   width: 100%;
   aspect-ratio: 1;
-  border-radius: 16px;
-  background: rgba(255, 255, 255, 0.04);
+  border-radius: 12px;
   font-weight: 800;
   font-size: 1.1rem;
 }
 
+.session-nav-item[data-running="true"] .session-nav-title,
+.session-nav-item[data-running="true"] .session-nav-compact {
+  color: #f2b45d;
+  animation: sessionPulse 1.35s ease-in-out infinite;
+}
+
 .sidebar-rail[data-collapsed="true"] .session-nav-item {
   padding: 0;
-  border-radius: 20px;
+  border-left: 0;
 }
 
 .empty-sessions {
@@ -515,6 +511,19 @@ p {
 
 .kind-note .event-kind {
   color: #a9b0bd;
+}
+
+@keyframes sessionPulse {
+  0%,
+  100% {
+    opacity: 1;
+    text-shadow: 0 0 0 rgba(242, 180, 93, 0);
+  }
+
+  50% {
+    opacity: 0.66;
+    text-shadow: 0 0 18px rgba(242, 180, 93, 0.34);
+  }
 }
 
 @media (max-width: 1180px) {
