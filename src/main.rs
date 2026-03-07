@@ -1,5 +1,3 @@
-mod core;
-
 use std::env;
 use std::fs;
 use std::io::{self, Stdout};
@@ -7,7 +5,7 @@ use std::sync::mpsc::Receiver;
 use std::time::Duration;
 use std::process;
 
-use crate::core::{compact_text_to, parse_event, spawn_codex_run, Event, EventKind, RunSettings, RunnerUpdate, Summary};
+use agent_top_core::{compact_text_to, parse_event, spawn_codex_run, Event, EventKind, RunSettings, RunnerUpdate, Summary};
 use crossterm::cursor::{Hide, MoveTo, Show};
 use crossterm::event::{self, Event as CEvent, KeyCode, KeyEventKind, KeyModifiers};
 use crossterm::execute;
