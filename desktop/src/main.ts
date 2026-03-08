@@ -534,6 +534,8 @@ async function startRun(prompt: string) {
       if (existing.running) {
         throw new Error("session is already running");
       }
+      const nextCodexSessionId =
+        existing.workspace === currentWorkspace ? existing.codexSessionId : null;
 
       setComposerMessage(`Continuing ${existing.id}...`);
       const response = await invoke<StartRunResponse>("continue_session", {
@@ -550,7 +552,7 @@ async function startRun(prompt: string) {
         title: existing.title,
         prompt: trimmedPrompt,
         workspace: currentWorkspace,
-        codex_session_id: existing.codexSessionId,
+        codex_session_id: nextCodexSessionId,
         lifecycle: "launching",
         status: "Launching",
         updated_at: String(Date.now()),

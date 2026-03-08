@@ -59,6 +59,7 @@ pub struct SessionUpdate {
 pub struct SessionRunUpdate {
     pub prompt: String,
     pub workspace: String,
+    pub codex_session_id: Option<String>,
     pub lifecycle: SessionLifecycle,
     pub status: String,
     pub settings: RunSettings,
@@ -299,19 +300,21 @@ impl SessionStore {
                 update sessions
                 set prompt = ?2,
                     workspace = ?3,
-                    lifecycle = ?4,
-                    status = ?5,
-                    updated_at = ?6,
-                    last_message = ?7,
-                    model = ?8,
-                    sandbox = ?9,
-                    approval = ?10
+                    codex_session_id = ?4,
+                    lifecycle = ?5,
+                    status = ?6,
+                    updated_at = ?7,
+                    last_message = ?8,
+                    model = ?9,
+                    sandbox = ?10,
+                    approval = ?11
                 where id = ?1
                 "#,
                 params![
                     session_id,
                     update.prompt,
                     update.workspace,
+                    update.codex_session_id,
                     lifecycle_to_str(update.lifecycle),
                     update.status,
                     now_ms(),
@@ -718,6 +721,7 @@ mod tests {
                 &SessionRunUpdate {
                     prompt: "second prompt".to_string(),
                     workspace: "c:/repo-b".to_string(),
+                    codex_session_id: None,
                     lifecycle: SessionLifecycle::Launching,
                     status: "Launching".to_string(),
                     settings: RunSettings {
@@ -737,6 +741,7 @@ mod tests {
         assert!(updated);
         assert_eq!(session.prompt, "second prompt");
         assert_eq!(session.workspace, "c:/repo-b");
+        assert_eq!(session.codex_session_id, None);
         assert_eq!(session.lifecycle, SessionLifecycle::Launching);
         assert_eq!(session.status, "Launching");
         assert_eq!(session.settings.model, "o4");

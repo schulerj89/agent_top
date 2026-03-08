@@ -281,11 +281,17 @@ fn continue_session(
 
     let workspace = normalize_workspace_display(&run.workspace);
     let settings = settings_payload_to_run(&run.settings);
+    let existing = state
+        .store
+        .get_session(&request.session_id)?
+        .ok_or_else(|| "session history entry not found".to_string())?;
+    let resume_codex_session_id = resume_codex_session_id(&existing, &workspace);
     let updated = state.store.prepare_session_run(
         &request.session_id,
         &SessionRunUpdate {
             prompt: run.prompt.clone(),
             workspace: workspace.clone(),
+            codex_session_id: resume_codex_session_id.clone(),
             lifecycle: SessionLifecycle::Launching,
             status: "Launching".to_string(),
             settings: settings.clone(),
@@ -303,10 +309,7 @@ fn continue_session(
         run.prompt,
         workspace,
         settings,
-        state
-            .store
-            .get_session(&request.session_id)?
-            .and_then(|session| session.codex_session_id),
+        resume_codex_session_id,
     )?;
     Ok(StartRunResponse {
         session_id: request.session_id,
@@ -577,6 +580,15 @@ fn normalize_workspace_display(path: &str) -> String {
     path.strip_prefix(r"\\?\")
         .unwrap_or(path)
         .to_string()
+}
+
+fn resume_codex_session_id(session: &StoredSession, requested_workspace: &str) -> Option<String> {
+    if normalize_workspace_display(&session.workspace) == normalize_workspace_display(requested_workspace)
+    {
+        session.codex_session_id.clone()
+    } else {
+        None
+    }
 }
 
 fn persist_runner_update(
@@ -965,6 +977,37 @@ mod tests {
         assert_eq!(
             repaired.last_message.as_deref(),
             Some("session cancelled after losing the active process")
+        );
+    }
+
+    #[test]
+    fn reuses_codex_session_only_when_workspace_matches() {
+        let session = StoredSession {
+            id: "run-1".to_string(),
+            title: "Prompt".to_string(),
+            prompt: "prompt".to_string(),
+            workspace: r"\\?\C:\Users\joshs\Projects\repo-a".to_string(),
+            codex_session_id: Some("019ccdee-5bdb-7602-95df-d6edbfd0083c".to_string()),
+            lifecycle: SessionLifecycle::Completed,
+            status: "Completed".to_string(),
+            created_at: 1,
+            updated_at: 2,
+            last_event_at: Some(2),
+            last_message: Some("done".to_string()),
+            total_events: 1,
+            command_count: 0,
+            warning_count: 0,
+            error_count: 0,
+            settings: RunSettings::default(),
+        };
+
+        assert_eq!(
+            resume_codex_session_id(&session, r"C:\Users\joshs\Projects\repo-a").as_deref(),
+            Some("019ccdee-5bdb-7602-95df-d6edbfd0083c")
+        );
+        assert_eq!(
+            resume_codex_session_id(&session, r"C:\Users\joshs\Projects\repo-b"),
+            None
         );
     }
 
