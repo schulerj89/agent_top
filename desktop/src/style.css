@@ -206,6 +206,12 @@ p {
   color: #8f99a7;
 }
 
+.settings-note {
+  margin: -4px 0 16px;
+  color: #96a0af;
+  font-size: 0.9rem;
+}
+
 .field {
   display: block;
   margin-bottom: 16px;

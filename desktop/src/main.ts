@@ -111,7 +111,7 @@ app.innerHTML = `
         <section class="panel composer-panel">
           <header class="panel-header">
             <h2>Composer</h2>
-            <p>Launch new runs with the same validated controls. New sessions appear in the left rail immediately.</p>
+            <p>Launch new runs with explicit Codex execution settings. New sessions appear in the left rail immediately.</p>
           </header>
           <label class="field">
             <span>Prompt</span>
@@ -125,20 +125,21 @@ app.innerHTML = `
             <label class="field">
               <span>Sandbox</span>
               <select id="sandboxInput">
-                <option value="read-only">read-only</option>
-                <option value="workspace-write">workspace-write</option>
-                <option value="danger-full-access">danger-full-access</option>
+                <option value="read-only">Read-only</option>
+                <option value="workspace-write">Workspace write</option>
+                <option value="danger-full-access">Danger full access</option>
               </select>
             </label>
             <label class="field">
               <span>Approval</span>
               <select id="approvalInput">
-                <option value="untrusted">untrusted</option>
-                <option value="on-request">on-request</option>
-                <option value="never">never</option>
+                <option value="untrusted">Untrusted only</option>
+                <option value="on-request">On request</option>
+                <option value="never">Never ask</option>
               </select>
             </label>
           </div>
+          <p class="settings-note"><code>Danger full access</code> still uses Codex sandbox flags. It is not the same as <code>--dangerously-bypass-approvals-and-sandbox</code>.</p>
           <p id="composerMessage" class="run-message">Ready.</p>
         </section>
 
