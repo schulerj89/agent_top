@@ -1,6 +1,4 @@
 import "./style.css";
-import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
 
 import {
   adjacentSessionId,
@@ -47,6 +45,12 @@ type CancelRunResponse = {
   session: SessionListItem | null;
 };
 
+type TauriEventUnlisten = () => void;
+type TauriApi = {
+  invoke: <T>(command: string, args?: Record<string, unknown>) => Promise<T>;
+  listen: <T>(event: string, handler: (event: { payload: T }) => void | Promise<void>) => Promise<TauriEventUnlisten>;
+};
+
 const MODEL_OPTIONS = [
   { value: "", label: "CLI default" },
   { value: "gpt-5.2-codex", label: "GPT-5.2 Codex" },
@@ -55,6 +59,19 @@ const MODEL_OPTIONS = [
   { value: "gpt-5.1-codex-max", label: "GPT-5.1 Codex Max" },
   { value: "gpt-5-codex", label: "GPT-5 Codex" },
 ];
+
+async function loadTauriApi(): Promise<TauriApi | null> {
+  if (!(window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__) {
+    return null;
+  }
+
+  const [{ invoke }, { listen }] = await Promise.all([
+    import("@tauri-apps/api/core"),
+    import("@tauri-apps/api/event"),
+  ]);
+
+  return { invoke, listen };
+}
 
 const app = document.querySelector<HTMLDivElement>("#app");
 if (!app) {
@@ -247,6 +264,7 @@ const eventSearchInput = document.querySelector<HTMLInputElement>("#eventSearchI
 const kindFilter = document.querySelector<HTMLSelectElement>("#kindFilter")!;
 const detailEventsList = document.querySelector<HTMLUListElement>("#detailEventsList")!;
 
+let tauriApi: TauriApi | null = null;
 let currentWorkspace = "";
 let loading = true;
 let loadingDetail = false;
@@ -475,6 +493,10 @@ async function runGuarded(action: () => Promise<void>, fallback: string) {
 }
 
 async function selectSession(sessionId: string) {
+  if (!tauriApi) {
+    return;
+  }
+
   draftingNewSession = false;
   selectedSessionId = sessionId;
   const selected = sessions.get(sessionId);
@@ -489,9 +511,13 @@ async function selectSession(sessionId: string) {
   }
 
   await runGuarded(async () => {
+    const api = tauriApi;
+    if (!api) {
+      throw new Error("Tauri runtime is not available. Launch this UI through the desktop app.");
+    }
     loadingDetail = true;
     renderSelectedSession();
-    const events = await invoke<SessionEvent[]>("get_session_events", {
+    const events = await api.invoke<SessionEvent[]>("get_session_events", {
       request: { session_id: sessionId, limit: 250 },
     });
     const current = sessions.get(sessionId);
@@ -518,6 +544,9 @@ async function deleteSelectedSession() {
   if (!selectedSessionId) {
     return;
   }
+  if (!tauriApi) {
+    return;
+  }
 
   const sessionId = selectedSessionId;
   const session = sessions.get(sessionId);
@@ -532,7 +561,11 @@ async function deleteSelectedSession() {
   }
 
   await runGuarded(async () => {
-    const response = await invoke<DeleteSessionResponse>("delete_session", {
+    const api = tauriApi;
+    if (!api) {
+      throw new Error("Tauri runtime is not available. Launch this UI through the desktop app.");
+    }
+    const response = await api.invoke<DeleteSessionResponse>("delete_session", {
       request: { session_id: sessionId },
     });
     if (!response.deleted) {
@@ -566,6 +599,10 @@ async function startRun(prompt: string) {
   }
 
   await runGuarded(async () => {
+    if (!tauriApi) {
+      throw new Error("Tauri runtime is not available. Launch this UI through the desktop app.");
+    }
+    const api = tauriApi;
     setLoadingState(true);
     const settings = currentSettings();
     const existing = selectedSessionId && !draftingNewSession ? sessions.get(selectedSessionId) ?? null : null;
@@ -578,7 +615,7 @@ async function startRun(prompt: string) {
         existing.workspace === currentWorkspace ? existing.codexSessionId : null;
 
       setComposerMessage(`Continuing ${existing.id}...`);
-      const response = await invoke<StartRunResponse>("continue_session", {
+      const response = await api.invoke<StartRunResponse>("continue_session", {
         request: { session_id: existing.id, limit: null },
         run: {
           prompt: trimmedPrompt,
@@ -613,7 +650,7 @@ async function startRun(prompt: string) {
     }
 
     setComposerMessage("Starting new session...");
-    const response = await invoke<StartRunResponse>("start_run", {
+    const response = await api.invoke<StartRunResponse>("start_run", {
       request: {
         prompt: trimmedPrompt,
         workspace: currentWorkspace,
@@ -651,7 +688,17 @@ async function startRun(prompt: string) {
 async function bootstrap() {
   await runGuarded(async () => {
     setLoadingState(true);
-    const payload = await invoke<Bootstrap>("bootstrap");
+    tauriApi = await loadTauriApi();
+    if (!tauriApi) {
+      defaultWorkspace = "Desktop runtime required";
+      applyComposerState(defaultWorkspace, "", defaultSettings);
+      setError("Tauri runtime is not available in the browser preview. Open Agent Top as the desktop app to run sessions.");
+      setComposerMessage("Browser preview mode. Tauri commands are disabled.");
+      renderAll();
+      return;
+    }
+
+    const payload = await tauriApi.invoke<Bootstrap>("bootstrap");
     defaultWorkspace = payload.workspace;
     defaultSettings = payload.settings;
     applyComposerState(payload.workspace, "", payload.settings);
@@ -682,7 +729,10 @@ chooseFolderButton.addEventListener("click", async () => {
 
   await runGuarded(async () => {
     chooseFolderButton.disabled = true;
-    const selected = await invoke<string | null>("pick_workspace");
+    if (!tauriApi) {
+      throw new Error("Tauri runtime is not available. Launch this UI through the desktop app.");
+    }
+    const selected = await tauriApi.invoke<string | null>("pick_workspace");
     if (typeof selected === "string" && selected.trim()) {
       defaultWorkspace = selected;
       currentWorkspace = selected;
@@ -729,7 +779,11 @@ cancelRunButton.addEventListener("click", async () => {
   const sessionId = selectedSessionId;
 
   await runGuarded(async () => {
-    const response = await invoke<CancelRunResponse>("cancel_run", {
+    if (!tauriApi) {
+      throw new Error("Tauri runtime is not available. Launch this UI through the desktop app.");
+    }
+    const api = tauriApi;
+    const response = await api.invoke<CancelRunResponse>("cancel_run", {
       request: { session_id: sessionId },
     });
     if (response.session) {
@@ -758,7 +812,11 @@ retryRunButton.addEventListener("click", async () => {
   const sessionId = selectedSessionId;
 
   await runGuarded(async () => {
-    const response = await invoke<StartRunResponse>("retry_run", {
+    if (!tauriApi) {
+      throw new Error("Tauri runtime is not available. Launch this UI through the desktop app.");
+    }
+    const api = tauriApi;
+    const response = await api.invoke<StartRunResponse>("retry_run", {
       request: { session_id: sessionId },
     });
     setComposerMessage(`Retried ${sessionId} as ${response.session_id}.`);
@@ -786,23 +844,34 @@ window.addEventListener("keydown", async (event) => {
   }
 });
 
-listen<AgentEvent>("agent-event", async (event) => {
-  const existing = sessions.get(event.payload.session_id);
-  if (existing) {
-    sessions.set(existing.id, applyAgentEvent(existing, event.payload));
-  } else {
-    const summary = await invoke<SessionListItem | null>("get_session", {
-      request: { session_id: event.payload.session_id },
-    });
-    if (summary) {
-      upsertSession(summary);
-    }
-  }
-
-  renderAll();
-});
-
 bootstrap().catch((error) => {
   setError(error instanceof Error ? error.message : String(error));
   setLoadingState(false);
 });
+
+loadTauriApi()
+  .then(async (api) => {
+    tauriApi = api;
+    if (!tauriApi) {
+      return;
+    }
+
+    await tauriApi.listen<AgentEvent>("agent-event", async (event) => {
+      const existing = sessions.get(event.payload.session_id);
+      if (existing) {
+        sessions.set(existing.id, applyAgentEvent(existing, event.payload));
+      } else {
+        const summary = await tauriApi!.invoke<SessionListItem | null>("get_session", {
+          request: { session_id: event.payload.session_id },
+        });
+        if (summary) {
+          upsertSession(summary);
+        }
+      }
+
+      renderAll();
+    });
+  })
+  .catch(() => {
+    tauriApi = null;
+  });

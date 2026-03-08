@@ -225,25 +225,33 @@ p {
 }
 
 .checkbox-field {
-  align-self: end;
+  grid-column: 1 / -1;
+  align-self: auto;
 }
 
 .checkbox-control {
   display: flex;
   align-items: center;
   gap: 10px;
-  min-height: 52px;
+  min-height: 56px;
   border-radius: 16px;
   border: 1px solid rgba(255, 255, 255, 0.08);
   padding: 14px 16px;
   color: #f6f4ef;
   background: rgba(255, 255, 255, 0.04);
+  flex-wrap: wrap;
 }
 
 .checkbox-control input {
   width: 18px;
   height: 18px;
   margin: 0;
+}
+
+.checkbox-control span {
+  margin: 0;
+  font-size: 0.95rem;
+  color: #f6f4ef;
 }
 
 .field input,
@@ -279,7 +287,7 @@ p {
 
 .settings-grid {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 12px;
 }
 
