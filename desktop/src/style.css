@@ -231,7 +231,8 @@ p {
 
 .checkbox-control {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
+  justify-content: flex-start;
   gap: 10px;
   min-height: 56px;
   border-radius: 16px;
@@ -243,13 +244,16 @@ p {
 }
 
 .checkbox-control input {
+  flex: 0 0 auto;
   width: 18px;
   height: 18px;
   margin: 0;
+  margin-top: 2px;
 }
 
 .checkbox-control span {
   margin: 0;
+  text-align: left;
   font-size: 0.95rem;
   color: #f6f4ef;
 }
