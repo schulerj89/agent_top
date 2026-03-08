@@ -357,39 +357,9 @@ pub fn start_codex_run(request: RunRequest) -> ManagedRun {
     thread::spawn(move || {
         let executable = if cfg!(windows) { "codex.cmd" } else { "codex" };
         let mut command = Command::new(executable);
+        command.args(build_codex_args(&request));
 
-        if !request.settings.approval.trim().is_empty() {
-            command
-                .arg("--ask-for-approval")
-                .arg(request.settings.approval.as_str());
-        }
-
-        command
-            .arg("-C")
-            .arg(request.workspace.as_str());
-
-        if !request.settings.model.trim().is_empty() {
-            command.arg("--model").arg(request.settings.model.as_str());
-        }
-
-        if !request.settings.sandbox.trim().is_empty() {
-            command
-                .arg("--sandbox")
-                .arg(request.settings.sandbox.as_str());
-        }
-
-        command.arg("exec");
-        if let Some(codex_session_id) = request.codex_session_id.as_deref() {
-            command.arg("resume").arg(codex_session_id);
-        }
-
-        let spawned = command
-            .arg("--json")
-            .arg("--skip-git-repo-check")
-            .arg(request.prompt.as_str())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn();
+        let spawned = command.stdout(Stdio::piped()).stderr(Stdio::piped()).spawn();
 
         let mut process = match spawned {
             Ok(child_process) => child_process,
@@ -455,6 +425,39 @@ pub fn spawn_codex_run(
         codex_session_id: None,
     })
     .receiver
+}
+
+fn build_codex_args(request: &RunRequest) -> Vec<String> {
+    let mut args = Vec::new();
+
+    if !request.settings.approval.trim().is_empty() {
+        args.push("--ask-for-approval".to_string());
+        args.push(request.settings.approval.clone());
+    }
+
+    args.push("-C".to_string());
+    args.push(request.workspace.clone());
+
+    if !request.settings.model.trim().is_empty() {
+        args.push("--model".to_string());
+        args.push(request.settings.model.clone());
+    }
+
+    if !request.settings.sandbox.trim().is_empty() {
+        args.push("--sandbox".to_string());
+        args.push(request.settings.sandbox.clone());
+    }
+
+    args.push("exec".to_string());
+    if let Some(codex_session_id) = request.codex_session_id.as_deref() {
+        args.push("resume".to_string());
+        args.push(codex_session_id.to_string());
+    }
+
+    args.push("--json".to_string());
+    args.push("--skip-git-repo-check".to_string());
+    args.push(request.prompt.clone());
+    args
 }
 
 pub fn compact_text(text: &str) -> String {
@@ -838,5 +841,35 @@ mod tests {
         assert!(events
             .iter()
             .any(|update| update.event.kind == EventKind::File));
+    }
+
+    #[test]
+    fn fresh_exec_args_do_not_include_resume() {
+        let args = build_codex_args(&RunRequest {
+            session_id: "run-1".to_string(),
+            prompt: "fix tests".to_string(),
+            workspace: "c:/repo".to_string(),
+            settings: RunSettings::default(),
+            codex_session_id: None,
+        });
+
+        assert!(args.windows(2).all(|window| window != ["exec", "resume"]));
+        assert!(args.contains(&"exec".to_string()));
+        assert!(!args.contains(&"resume".to_string()));
+    }
+
+    #[test]
+    fn resumed_exec_args_include_resume_and_session_id() {
+        let args = build_codex_args(&RunRequest {
+            session_id: "run-1".to_string(),
+            prompt: "continue with more tests".to_string(),
+            workspace: "c:/repo".to_string(),
+            settings: RunSettings::default(),
+            codex_session_id: Some("019ccdee-5bdb-7602-95df-d6edbfd0083c".to_string()),
+        });
+
+        let resume_index = args.iter().position(|value| value == "resume").expect("resume argument");
+        assert_eq!(args[resume_index + 1], "019ccdee-5bdb-7602-95df-d6edbfd0083c");
+        assert_eq!(args[resume_index - 1], "exec");
     }
 }
