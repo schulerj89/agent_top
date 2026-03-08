@@ -57,6 +57,11 @@ struct DeleteSessionResponse {
     deleted: bool,
 }
 
+#[derive(Serialize)]
+struct CancelRunResponse {
+    session: Option<SessionListItem>,
+}
+
 #[derive(Deserialize)]
 struct SessionLookupRequest {
     session_id: String,
@@ -202,17 +207,26 @@ fn start_run(
 }
 
 #[tauri::command]
-fn cancel_run(state: State<'_, AppState>, request: CancelRunRequest) -> Result<(), String> {
+fn cancel_run(
+    state: State<'_, AppState>,
+    request: CancelRunRequest,
+) -> Result<CancelRunResponse, String> {
     let controller = {
         let guard = state
             .active_runs
             .lock()
             .map_err(|_| "active run state is unavailable".to_string())?;
         guard.get(&request.session_id).cloned()
-    }
-    .ok_or_else(|| "session is not running".to_string())?;
+    };
 
-    controller.cancel().map(|_| ())
+    if let Some(controller) = controller {
+        controller.cancel().map(|_| CancelRunResponse { session: None })
+    } else {
+        let repaired = reconcile_cancelled_orphaned_session(&state.store, &request.session_id)?;
+        Ok(CancelRunResponse {
+            session: repaired.map(SessionListItem::from),
+        })
+    }
 }
 
 #[tauri::command]
@@ -455,6 +469,62 @@ fn next_session_seed(store: &SessionStore) -> Result<u64, String> {
     Ok(highest + 1)
 }
 
+fn reconcile_orphaned_sessions(store: &SessionStore) -> Result<(), String> {
+    for session in store.list_sessions(None)? {
+        match session.lifecycle {
+            SessionLifecycle::Launching | SessionLifecycle::Running => {
+                store.update_session(
+                    &session.id,
+                    &SessionUpdate {
+                        lifecycle: SessionLifecycle::Failed,
+                        status: "Stopped before completion".to_string(),
+                        last_message: None,
+                    },
+                )?;
+            }
+            SessionLifecycle::Cancelling => {
+                store.update_session(
+                    &session.id,
+                    &SessionUpdate {
+                        lifecycle: SessionLifecycle::Cancelled,
+                        status: "Cancelled".to_string(),
+                        last_message: None,
+                    },
+                )?;
+            }
+            SessionLifecycle::Cancelled | SessionLifecycle::Completed | SessionLifecycle::Failed => {}
+        }
+    }
+
+    Ok(())
+}
+
+fn reconcile_cancelled_orphaned_session(
+    store: &SessionStore,
+    session_id: &str,
+) -> Result<Option<StoredSession>, String> {
+    let Some(session) = store.get_session(session_id)? else {
+        return Err("session history entry not found".to_string());
+    };
+
+    match session.lifecycle {
+        SessionLifecycle::Launching | SessionLifecycle::Running | SessionLifecycle::Cancelling => {
+            store.update_session(
+                session_id,
+                &SessionUpdate {
+                    lifecycle: SessionLifecycle::Cancelled,
+                    status: "Cancelled".to_string(),
+                    last_message: Some("session cancelled after losing the active process".to_string()),
+                },
+            )?;
+            store.get_session(session_id)
+        }
+        SessionLifecycle::Cancelled | SessionLifecycle::Completed | SessionLifecycle::Failed => {
+            Err("session is not running".to_string())
+        }
+    }
+}
+
 fn forward_events(app: AppHandle, store: SessionStore, session_id: String, managed: ManagedRun) {
     std::thread::spawn(move || {
         while let Ok(update) = managed.receiver.recv() {
@@ -583,6 +653,7 @@ pub fn run() {
             let database_path = default_db_path();
             let store = SessionStore::new(database_path.clone());
             store.init().map_err(io::Error::other)?;
+            reconcile_orphaned_sessions(&store).map_err(io::Error::other)?;
             let next_session_id = next_session_seed(&store).map_err(io::Error::other)?;
 
             let state = AppState {
@@ -802,6 +873,73 @@ mod tests {
 
         let seed = next_session_seed(&store).expect("derive next session seed");
         assert_eq!(seed, 9);
+    }
+
+    #[test]
+    fn reconciles_orphaned_active_sessions_on_startup() {
+        let (_dir, store) = make_store();
+        store
+            .create_session(&CreateSessionInput {
+                id: "run-1".to_string(),
+                prompt: "prompt".to_string(),
+                workspace: "c:/repo".to_string(),
+                lifecycle: SessionLifecycle::Running,
+                status: "Running".to_string(),
+                settings: RunSettings::default(),
+            })
+            .expect("create running session");
+        store
+            .create_session(&CreateSessionInput {
+                id: "run-2".to_string(),
+                prompt: "prompt".to_string(),
+                workspace: "c:/repo".to_string(),
+                lifecycle: SessionLifecycle::Cancelling,
+                status: "Cancelling".to_string(),
+                settings: RunSettings::default(),
+            })
+            .expect("create cancelling session");
+
+        reconcile_orphaned_sessions(&store).expect("reconcile sessions");
+
+        let run_1 = store
+            .get_session("run-1")
+            .expect("load run-1")
+            .expect("run-1 exists");
+        let run_2 = store
+            .get_session("run-2")
+            .expect("load run-2")
+            .expect("run-2 exists");
+
+        assert_eq!(run_1.lifecycle, SessionLifecycle::Failed);
+        assert_eq!(run_1.status, "Stopped before completion");
+        assert_eq!(run_2.lifecycle, SessionLifecycle::Cancelled);
+        assert_eq!(run_2.status, "Cancelled");
+    }
+
+    #[test]
+    fn cancel_can_reconcile_orphaned_running_session() {
+        let (_dir, store) = make_store();
+        store
+            .create_session(&CreateSessionInput {
+                id: "run-1".to_string(),
+                prompt: "prompt".to_string(),
+                workspace: "c:/repo".to_string(),
+                lifecycle: SessionLifecycle::Running,
+                status: "Running".to_string(),
+                settings: RunSettings::default(),
+            })
+            .expect("create running session");
+
+        let repaired = reconcile_cancelled_orphaned_session(&store, "run-1")
+            .expect("reconcile cancelled session")
+            .expect("session exists");
+
+        assert_eq!(repaired.lifecycle, SessionLifecycle::Cancelled);
+        assert_eq!(repaired.status, "Cancelled");
+        assert_eq!(
+            repaired.last_message.as_deref(),
+            Some("session cancelled after losing the active process")
+        );
     }
 
 }

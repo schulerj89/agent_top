@@ -42,6 +42,10 @@ type DeleteSessionResponse = {
   deleted: boolean;
 };
 
+type CancelRunResponse = {
+  session: SessionListItem | null;
+};
+
 const app = document.querySelector<HTMLDivElement>("#app");
 if (!app) {
   throw new Error("app root not found");
@@ -671,7 +675,15 @@ cancelRunButton.addEventListener("click", async () => {
   const sessionId = selectedSessionId;
 
   await runGuarded(async () => {
-    await invoke("cancel_run", { request: { session_id: sessionId } });
+    const response = await invoke<CancelRunResponse>("cancel_run", {
+      request: { session_id: sessionId },
+    });
+    if (response.session) {
+      upsertSession(response.session);
+      renderAll();
+      return;
+    }
+
     const current = sessions.get(sessionId);
     if (current) {
       sessions.set(sessionId, {
