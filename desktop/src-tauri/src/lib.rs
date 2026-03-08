@@ -439,6 +439,22 @@ fn has_active_run(state: &AppState, session_id: &str) -> Result<bool, String> {
     Ok(guard.contains_key(session_id))
 }
 
+fn next_session_seed(store: &SessionStore) -> Result<u64, String> {
+    let highest = store
+        .list_sessions(None)?
+        .into_iter()
+        .filter_map(|session| {
+            session
+                .id
+                .strip_prefix("run-")
+                .and_then(|value| value.parse::<u64>().ok())
+        })
+        .max()
+        .unwrap_or(0);
+
+    Ok(highest + 1)
+}
+
 fn forward_events(app: AppHandle, store: SessionStore, session_id: String, managed: ManagedRun) {
     std::thread::spawn(move || {
         while let Ok(update) = managed.receiver.recv() {
@@ -567,11 +583,12 @@ pub fn run() {
             let database_path = default_db_path();
             let store = SessionStore::new(database_path.clone());
             store.init().map_err(io::Error::other)?;
+            let next_session_id = next_session_seed(&store).map_err(io::Error::other)?;
 
             let state = AppState {
                 default_workspace: detect_workspace(),
                 store,
-                next_session_id: AtomicU64::new(1),
+                next_session_id: AtomicU64::new(next_session_id),
                 active_runs: Mutex::new(HashMap::new()),
             };
 
@@ -747,6 +764,44 @@ mod tests {
         assert_eq!(mapped.model, "gpt-5");
         assert_eq!(mapped.sandbox, "danger-full-access");
         assert_eq!(mapped.approval, "never");
+    }
+
+    #[test]
+    fn derives_next_session_seed_from_highest_persisted_run_id() {
+        let (_dir, store) = make_store();
+        store
+            .create_session(&CreateSessionInput {
+                id: "run-2".to_string(),
+                prompt: "prompt".to_string(),
+                workspace: "c:/repo".to_string(),
+                lifecycle: SessionLifecycle::Completed,
+                status: "Completed".to_string(),
+                settings: RunSettings::default(),
+            })
+            .expect("create session 2");
+        store
+            .create_session(&CreateSessionInput {
+                id: "run-8".to_string(),
+                prompt: "prompt".to_string(),
+                workspace: "c:/repo".to_string(),
+                lifecycle: SessionLifecycle::Completed,
+                status: "Completed".to_string(),
+                settings: RunSettings::default(),
+            })
+            .expect("create session 8");
+        store
+            .create_session(&CreateSessionInput {
+                id: "imported-session".to_string(),
+                prompt: "prompt".to_string(),
+                workspace: "c:/repo".to_string(),
+                lifecycle: SessionLifecycle::Completed,
+                status: "Completed".to_string(),
+                settings: RunSettings::default(),
+            })
+            .expect("create non-run session");
+
+        let seed = next_session_seed(&store).expect("derive next session seed");
+        assert_eq!(seed, 9);
     }
 
 }
