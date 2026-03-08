@@ -285,7 +285,7 @@ fn continue_session(
         .store
         .get_session(&request.session_id)?
         .ok_or_else(|| "session history entry not found".to_string())?;
-    let resume_codex_session_id = resume_codex_session_id(&existing, &workspace);
+    let resume_codex_session_id = resume_codex_session_id(&existing, &workspace, &settings);
     let updated = state.store.prepare_session_run(
         &request.session_id,
         &SessionRunUpdate {
@@ -582,12 +582,21 @@ fn normalize_workspace_display(path: &str) -> String {
         .to_string()
 }
 
-fn resume_codex_session_id(session: &StoredSession, requested_workspace: &str) -> Option<String> {
-    if session.total_events == 0 {
+fn resume_codex_session_id(
+    session: &StoredSession,
+    requested_workspace: &str,
+    requested_settings: &RunSettings,
+) -> Option<String> {
+    if session.total_events == 0 || !session.resume_ready {
         return None;
     }
 
-    if normalize_workspace_display(&session.workspace) == normalize_workspace_display(requested_workspace)
+    if session.settings != *requested_settings {
+        return None;
+    }
+
+    if normalize_workspace_display(&session.workspace)
+        == normalize_workspace_display(requested_workspace)
     {
         session.codex_session_id.clone()
     } else {
@@ -623,7 +632,12 @@ fn persist_runner_update(
             status,
             last_message: Some(event.message.clone()),
         },
-    )
+    )?;
+    if finished {
+        store.set_resume_ready(session_id, lifecycle == SessionLifecycle::Completed)?;
+    }
+
+    Ok(())
 }
 
 fn lifecycle_for_event(event: &Event, finished: bool) -> SessionLifecycle {
@@ -817,6 +831,7 @@ mod tests {
             prompt: "prompt".to_string(),
             workspace: "c:/repo".to_string(),
             codex_session_id: Some("019ccdee-5bdb-7602-95df-d6edbfd0083c".to_string()),
+            resume_ready: false,
             lifecycle: SessionLifecycle::Running,
             status: "Running".to_string(),
             created_at: 1,
@@ -992,6 +1007,7 @@ mod tests {
             prompt: "prompt".to_string(),
             workspace: r"\\?\C:\Users\joshs\Projects\repo-a".to_string(),
             codex_session_id: Some("019ccdee-5bdb-7602-95df-d6edbfd0083c".to_string()),
+            resume_ready: true,
             lifecycle: SessionLifecycle::Completed,
             status: "Completed".to_string(),
             created_at: 1,
@@ -1006,11 +1022,20 @@ mod tests {
         };
 
         assert_eq!(
-            resume_codex_session_id(&session, r"C:\Users\joshs\Projects\repo-a").as_deref(),
+            resume_codex_session_id(
+                &session,
+                r"C:\Users\joshs\Projects\repo-a",
+                &RunSettings::default()
+            )
+            .as_deref(),
             Some("019ccdee-5bdb-7602-95df-d6edbfd0083c")
         );
         assert_eq!(
-            resume_codex_session_id(&session, r"C:\Users\joshs\Projects\repo-b"),
+            resume_codex_session_id(
+                &session,
+                r"C:\Users\joshs\Projects\repo-b",
+                &RunSettings::default()
+            ),
             None
         );
     }
@@ -1023,6 +1048,7 @@ mod tests {
             prompt: "prompt".to_string(),
             workspace: r"C:\Users\joshs\Projects\repo-a".to_string(),
             codex_session_id: Some("019ccdee-5bdb-7602-95df-d6edbfd0083c".to_string()),
+            resume_ready: false,
             lifecycle: SessionLifecycle::Launching,
             status: "Launching".to_string(),
             created_at: 1,
@@ -1037,7 +1063,59 @@ mod tests {
         };
 
         assert_eq!(
-            resume_codex_session_id(&session, r"C:\Users\joshs\Projects\repo-a"),
+            resume_codex_session_id(
+                &session,
+                r"C:\Users\joshs\Projects\repo-a",
+                &RunSettings::default()
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn does_not_resume_when_settings_change() {
+        let session = StoredSession {
+            id: "run-1".to_string(),
+            title: "Prompt".to_string(),
+            prompt: "prompt".to_string(),
+            workspace: r"C:\Users\joshs\Projects\repo-a".to_string(),
+            codex_session_id: Some("019ccdee-5bdb-7602-95df-d6edbfd0083c".to_string()),
+            resume_ready: true,
+            lifecycle: SessionLifecycle::Completed,
+            status: "Completed".to_string(),
+            created_at: 1,
+            updated_at: 2,
+            last_event_at: Some(2),
+            last_message: Some("done".to_string()),
+            total_events: 2,
+            command_count: 0,
+            warning_count: 0,
+            error_count: 0,
+            settings: RunSettings::default(),
+        };
+
+        assert_eq!(
+            resume_codex_session_id(
+                &session,
+                r"C:\Users\joshs\Projects\repo-a",
+                &RunSettings {
+                    model: String::new(),
+                    sandbox: "danger-full-access".to_string(),
+                    approval: "never".to_string(),
+                }
+            ),
+            None
+        );
+        assert_eq!(
+            resume_codex_session_id(
+                &session,
+                r"C:\Users\joshs\Projects\repo-a",
+                &RunSettings {
+                    model: String::new(),
+                    sandbox: "workspace-write".to_string(),
+                    approval: "on-request".to_string(),
+                }
+            ),
             None
         );
     }

@@ -14,6 +14,7 @@ pub struct StoredSession {
     pub prompt: String,
     pub workspace: String,
     pub codex_session_id: Option<String>,
+    pub resume_ready: bool,
     pub lifecycle: SessionLifecycle,
     pub status: String,
     pub created_at: i64,
@@ -96,6 +97,7 @@ impl SessionStore {
                     prompt text not null,
                     workspace text not null,
                     codex_session_id text,
+                    resume_ready integer not null default 0,
                     lifecycle text not null,
                     status text not null,
                     created_at integer not null,
@@ -145,12 +147,21 @@ impl SessionStore {
                 .collect::<Result<Vec<_>, _>>()
                 .map_err(|error| error.to_string())?
                 .into_iter()
-                .any(|name| name == "codex_session_id")
+                .collect::<Vec<_>>()
         };
 
-        if !has_codex_session_id {
+        if !has_codex_session_id.iter().any(|name| name == "codex_session_id") {
             connection
                 .execute("alter table sessions add column codex_session_id text", [])
+                .map_err(|error| error.to_string())?;
+        }
+
+        if !has_codex_session_id.iter().any(|name| name == "resume_ready") {
+            connection
+                .execute(
+                    "alter table sessions add column resume_ready integer not null default 0",
+                    [],
+                )
                 .map_err(|error| error.to_string())?;
         }
 
@@ -167,9 +178,9 @@ impl SessionStore {
                 r#"
                 insert into sessions (
                     id, title, prompt, workspace, lifecycle, status, created_at, updated_at,
-                    codex_session_id, last_event_at, last_message, total_events, command_count, warning_count,
+                    codex_session_id, resume_ready, last_event_at, last_message, total_events, command_count, warning_count,
                     error_count, model, sandbox, approval
-                ) values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?7, null, null, null, 0, 0, 0, 0, ?8, ?9, ?10)
+                ) values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?7, null, 0, null, null, 0, 0, 0, 0, ?8, ?9, ?10)
                 "#,
                 params![
                     input.id,
@@ -301,6 +312,7 @@ impl SessionStore {
                 set prompt = ?2,
                     workspace = ?3,
                     codex_session_id = ?4,
+                    resume_ready = 0,
                     lifecycle = ?5,
                     status = ?6,
                     updated_at = ?7,
@@ -416,8 +428,23 @@ impl SessionStore {
         Ok(())
     }
 
+    pub fn set_resume_ready(&self, session_id: &str, resume_ready: bool) -> Result<(), String> {
+        self.open()?
+            .execute(
+                "update sessions set resume_ready = ?2 where id = ?1",
+                params![session_id, if resume_ready { 1 } else { 0 }],
+            )
+            .map_err(|error| error.to_string())?;
+
+        Ok(())
+    }
+
     fn open(&self) -> Result<Connection, String> {
-        Connection::open(&self.path).map_err(|error| error.to_string())
+        let connection = Connection::open(&self.path).map_err(|error| error.to_string())?;
+        connection
+            .execute_batch("pragma foreign_keys = on;")
+            .map_err(|error| error.to_string())?;
+        Ok(connection)
     }
 }
 
@@ -437,6 +464,7 @@ fn read_session(row: &rusqlite::Row<'_>) -> rusqlite::Result<StoredSession> {
         prompt: row.get("prompt")?,
         workspace: row.get("workspace")?,
         codex_session_id: row.get("codex_session_id")?,
+        resume_ready: row.get::<_, i64>("resume_ready")? != 0,
         lifecycle: lifecycle_from_str(&row.get::<_, String>("lifecycle")?)?,
         status: row.get("status")?,
         created_at: row.get("created_at")?,
@@ -777,5 +805,43 @@ mod tests {
             session.codex_session_id.as_deref(),
             Some("019ccdee-5bdb-7602-95df-d6edbfd0083c")
         );
+        assert!(!session.resume_ready);
+    }
+
+    #[test]
+    fn stores_resume_ready_state() {
+        let (_dir, store) = store();
+        store
+            .create_session(&CreateSessionInput {
+                id: "run-1".to_string(),
+                prompt: "prompt".to_string(),
+                workspace: "c:/repo".to_string(),
+                lifecycle: SessionLifecycle::Completed,
+                status: "Completed".to_string(),
+                settings: test_settings(),
+            })
+            .expect("create session");
+
+        store
+            .set_resume_ready("run-1", true)
+            .expect("set resume ready");
+
+        let session = store
+            .get_session("run-1")
+            .expect("get session")
+            .expect("session exists");
+
+        assert!(session.resume_ready);
+    }
+
+    #[test]
+    fn enables_foreign_keys_for_open_connections() {
+        let (_dir, store) = store();
+        let connection = store.open().expect("open store");
+        let foreign_keys: i64 = connection
+            .query_row("pragma foreign_keys", [], |row| row.get(0))
+            .expect("pragma foreign_keys");
+
+        assert_eq!(foreign_keys, 1);
     }
 }
