@@ -20,6 +20,7 @@ export type SessionSettings = {
   model: string;
   sandbox: string;
   approval: string;
+  bypass_approvals_and_sandbox: boolean;
 };
 
 export type SessionListItem = {

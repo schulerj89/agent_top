@@ -26,6 +26,7 @@ type Settings = {
   model: string;
   sandbox: string;
   approval: string;
+  bypass_approvals_and_sandbox: boolean;
 };
 
 type Bootstrap = {
@@ -45,6 +46,15 @@ type DeleteSessionResponse = {
 type CancelRunResponse = {
   session: SessionListItem | null;
 };
+
+const MODEL_OPTIONS = [
+  { value: "", label: "CLI default" },
+  { value: "gpt-5.2-codex", label: "GPT-5.2 Codex" },
+  { value: "gpt-5.1-codex", label: "GPT-5.1 Codex" },
+  { value: "gpt-5.1-codex-mini", label: "GPT-5.1 Codex Mini" },
+  { value: "gpt-5.1-codex-max", label: "GPT-5.1 Codex Max" },
+  { value: "gpt-5-codex", label: "GPT-5 Codex" },
+];
 
 const app = document.querySelector<HTMLDivElement>("#app");
 if (!app) {
@@ -120,7 +130,9 @@ app.innerHTML = `
           <div class="settings-grid">
             <label class="field">
               <span>Model</span>
-              <input id="modelInput" type="text" placeholder="default" />
+              <select id="modelInput">
+                ${MODEL_OPTIONS.map((model) => `<option value="${model.value}">${model.label}</option>`).join("")}
+              </select>
             </label>
             <label class="field">
               <span>Sandbox</span>
@@ -138,8 +150,15 @@ app.innerHTML = `
                 <option value="never">Never ask</option>
               </select>
             </label>
+            <label class="field checkbox-field">
+              <span>Bypass</span>
+              <span class="checkbox-control">
+                <input id="bypassInput" type="checkbox" />
+                <span>Bypass approvals and sandbox</span>
+              </span>
+            </label>
           </div>
-          <p class="settings-note"><code>Danger full access</code> still uses Codex sandbox flags. It is not the same as <code>--dangerously-bypass-approvals-and-sandbox</code>.</p>
+          <p id="settingsNote" class="settings-note"><code>Danger full access</code> still uses Codex sandbox flags. Enable bypass to send <code>--dangerously-bypass-approvals-and-sandbox</code> and ignore sandbox and approval.</p>
           <p id="composerMessage" class="run-message">Ready.</p>
         </section>
 
@@ -198,9 +217,11 @@ const totalRuns = document.querySelector<HTMLElement>("#totalRuns")!;
 const totalEvents = document.querySelector<HTMLElement>("#totalEvents")!;
 const totalWarnings = document.querySelector<HTMLElement>("#totalWarnings")!;
 const promptInput = document.querySelector<HTMLTextAreaElement>("#promptInput")!;
-const modelInput = document.querySelector<HTMLInputElement>("#modelInput")!;
+const modelInput = document.querySelector<HTMLSelectElement>("#modelInput")!;
 const sandboxInput = document.querySelector<HTMLSelectElement>("#sandboxInput")!;
 const approvalInput = document.querySelector<HTMLSelectElement>("#approvalInput")!;
+const bypassInput = document.querySelector<HTMLInputElement>("#bypassInput")!;
+const settingsNote = document.querySelector<HTMLElement>("#settingsNote")!;
 const chooseFolderButton = document.querySelector<HTMLButtonElement>("#chooseFolderButton")!;
 const addRunButton = document.querySelector<HTMLButtonElement>("#addRunButton")!;
 const newSessionButton = document.querySelector<HTMLButtonElement>("#newSessionButton")!;
@@ -234,7 +255,12 @@ let draftingNewSession = false;
 const sessions = new Map<string, SessionState>();
 let navSearch = "";
 let eventFilter: SessionFilter = { query: "", kind: "all" };
-let defaultSettings: Settings = { model: "", sandbox: "workspace-write", approval: "never" };
+let defaultSettings: Settings = {
+  model: "",
+  sandbox: "workspace-write",
+  approval: "never",
+  bypass_approvals_and_sandbox: false,
+};
 let defaultWorkspace = "";
 
 function updateHeroStats() {
@@ -250,6 +276,7 @@ function currentSettings(): Settings {
     model: modelInput.value.trim(),
     sandbox: sandboxInput.value,
     approval: approvalInput.value,
+    bypass_approvals_and_sandbox: bypassInput.checked,
   };
 }
 
@@ -273,6 +300,16 @@ function setLoadingState(isLoading: boolean) {
   chooseFolderButton.disabled = isLoading;
   addRunButton.disabled = isLoading;
   newSessionButton.disabled = isLoading;
+  syncSettingsControls();
+}
+
+function syncSettingsControls() {
+  const bypass = bypassInput.checked;
+  sandboxInput.disabled = loading || bypass;
+  approvalInput.disabled = loading || bypass;
+  settingsNote.innerHTML = bypass
+    ? "<code>Bypass approvals and sandbox</code> is enabled. Codex will receive <code>--dangerously-bypass-approvals-and-sandbox</code> and ignore the sandbox and approval selectors."
+    : "<code>Danger full access</code> still uses Codex sandbox flags. Enable bypass to send <code>--dangerously-bypass-approvals-and-sandbox</code> and ignore sandbox and approval.";
 }
 
 function applyComposerState(workspace: string, prompt: string, settings: SessionSettings | Settings) {
@@ -282,6 +319,8 @@ function applyComposerState(workspace: string, prompt: string, settings: Session
   modelInput.value = settings.model;
   sandboxInput.value = settings.sandbox;
   approvalInput.value = settings.approval;
+  bypassInput.checked = settings.bypass_approvals_and_sandbox;
+  syncSettingsControls();
 }
 
 function upsertSession(summary: SessionListItem) {
@@ -677,6 +716,10 @@ eventSearchInput.addEventListener("input", () => {
 kindFilter.addEventListener("change", () => {
   eventFilter = { ...eventFilter, kind: kindFilter.value as Kind | "all" };
   renderSelectedSession();
+});
+
+bypassInput.addEventListener("change", () => {
+  syncSettingsControls();
 });
 
 cancelRunButton.addEventListener("click", async () => {

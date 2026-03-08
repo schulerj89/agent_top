@@ -110,7 +110,8 @@ impl SessionStore {
                     error_count integer not null default 0,
                     model text not null,
                     sandbox text not null,
-                    approval text not null
+                    approval text not null,
+                    bypass_approvals_and_sandbox integer not null default 0
                 );
 
                 create table if not exists events (
@@ -135,7 +136,7 @@ impl SessionStore {
             )
             .map_err(|error| error.to_string())?;
 
-        let has_codex_session_id = {
+        let session_columns = {
             let mut statement = connection
                 .prepare("pragma table_info(sessions)")
                 .map_err(|error| error.to_string())?;
@@ -150,16 +151,28 @@ impl SessionStore {
                 .collect::<Vec<_>>()
         };
 
-        if !has_codex_session_id.iter().any(|name| name == "codex_session_id") {
+        if !session_columns.iter().any(|name| name == "codex_session_id") {
             connection
                 .execute("alter table sessions add column codex_session_id text", [])
                 .map_err(|error| error.to_string())?;
         }
 
-        if !has_codex_session_id.iter().any(|name| name == "resume_ready") {
+        if !session_columns.iter().any(|name| name == "resume_ready") {
             connection
                 .execute(
                     "alter table sessions add column resume_ready integer not null default 0",
+                    [],
+                )
+                .map_err(|error| error.to_string())?;
+        }
+
+        if !session_columns
+            .iter()
+            .any(|name| name == "bypass_approvals_and_sandbox")
+        {
+            connection
+                .execute(
+                    "alter table sessions add column bypass_approvals_and_sandbox integer not null default 0",
                     [],
                 )
                 .map_err(|error| error.to_string())?;
@@ -179,8 +192,8 @@ impl SessionStore {
                 insert into sessions (
                     id, title, prompt, workspace, lifecycle, status, created_at, updated_at,
                     codex_session_id, resume_ready, last_event_at, last_message, total_events, command_count, warning_count,
-                    error_count, model, sandbox, approval
-                ) values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?7, null, 0, null, null, 0, 0, 0, 0, ?8, ?9, ?10)
+                    error_count, model, sandbox, approval, bypass_approvals_and_sandbox
+                ) values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?7, null, 0, null, null, 0, 0, 0, 0, ?8, ?9, ?10, ?11)
                 "#,
                 params![
                     input.id,
@@ -192,7 +205,12 @@ impl SessionStore {
                     now,
                     input.settings.model,
                     input.settings.sandbox,
-                    input.settings.approval
+                    input.settings.approval,
+                    if input.settings.bypass_approvals_and_sandbox {
+                        1
+                    } else {
+                        0
+                    }
                 ],
             )
             .map_err(|error| error.to_string())?;
@@ -319,7 +337,8 @@ impl SessionStore {
                     last_message = ?8,
                     model = ?9,
                     sandbox = ?10,
-                    approval = ?11
+                    approval = ?11,
+                    bypass_approvals_and_sandbox = ?12
                 where id = ?1
                 "#,
                 params![
@@ -333,7 +352,12 @@ impl SessionStore {
                     "waiting for first event",
                     update.settings.model,
                     update.settings.sandbox,
-                    update.settings.approval
+                    update.settings.approval,
+                    if update.settings.bypass_approvals_and_sandbox {
+                        1
+                    } else {
+                        0
+                    }
                 ],
             )
             .map_err(|error| error.to_string())?;
@@ -479,6 +503,9 @@ fn read_session(row: &rusqlite::Row<'_>) -> rusqlite::Result<StoredSession> {
             model: row.get("model")?,
             sandbox: row.get("sandbox")?,
             approval: row.get("approval")?,
+            bypass_approvals_and_sandbox: row
+                .get::<_, i64>("bypass_approvals_and_sandbox")?
+                != 0,
         },
     })
 }
@@ -566,6 +593,7 @@ mod tests {
             model: "gpt-5".to_string(),
             sandbox: "workspace-write".to_string(),
             approval: "never".to_string(),
+            bypass_approvals_and_sandbox: false,
         }
     }
 
@@ -756,6 +784,7 @@ mod tests {
                         model: "o4".to_string(),
                         sandbox: "danger-full-access".to_string(),
                         approval: "on-request".to_string(),
+                        bypass_approvals_and_sandbox: true,
                     },
                 },
             )
@@ -775,6 +804,7 @@ mod tests {
         assert_eq!(session.settings.model, "o4");
         assert_eq!(session.settings.sandbox, "danger-full-access");
         assert_eq!(session.settings.approval, "on-request");
+        assert!(session.settings.bypass_approvals_and_sandbox);
         assert_eq!(session.last_message.as_deref(), Some("waiting for first event"));
     }
 

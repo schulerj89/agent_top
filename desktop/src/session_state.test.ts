@@ -28,7 +28,7 @@ function summary(overrides: Partial<SessionListItem> = {}): SessionListItem {
     command_count: 0,
     warning_count: 0,
     error_count: 0,
-    settings: { model: "", sandbox: "workspace-write", approval: "never" },
+    settings: { model: "", sandbox: "workspace-write", approval: "never", bypass_approvals_and_sandbox: false },
     ...overrides,
   };
 }
@@ -109,7 +109,7 @@ describe("session state", () => {
     const session = createSessionState(
       summary({
         workspace: "c:/workspace-a",
-        settings: { model: "gpt-5", sandbox: "danger-full-access", approval: "never" },
+        settings: { model: "gpt-5", sandbox: "danger-full-access", approval: "never", bypass_approvals_and_sandbox: true },
       }),
     );
 
@@ -117,7 +117,7 @@ describe("session state", () => {
       session,
       summary({
         workspace: "c:/workspace-b",
-        settings: { model: "o4", sandbox: "workspace-write", approval: "on-request" },
+        settings: { model: "o4", sandbox: "workspace-write", approval: "on-request", bypass_approvals_and_sandbox: false },
       }),
     );
 
@@ -126,5 +126,6 @@ describe("session state", () => {
     expect(next.workspace).toBe("c:/workspace-b");
     expect(next.settings.sandbox).toBe("workspace-write");
     expect(next.settings.approval).toBe("on-request");
+    expect(next.settings.bypass_approvals_and_sandbox).toBe(false);
   });
 });

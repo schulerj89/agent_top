@@ -38,6 +38,7 @@ struct SettingsPayload {
     model: String,
     sandbox: String,
     approval: String,
+    bypass_approvals_and_sandbox: bool,
 }
 
 #[derive(Clone, Deserialize)]
@@ -336,6 +337,7 @@ impl Default for SettingsPayload {
             model: String::new(),
             sandbox: "workspace-write".to_string(),
             approval: "never".to_string(),
+            bypass_approvals_and_sandbox: false,
         }
     }
 }
@@ -345,6 +347,7 @@ fn settings_payload_to_run(settings: &SettingsPayload) -> RunSettings {
         model: settings.model.clone(),
         sandbox: settings.sandbox.clone(),
         approval: settings.approval.clone(),
+        bypass_approvals_and_sandbox: settings.bypass_approvals_and_sandbox,
     }
 }
 
@@ -383,6 +386,7 @@ impl From<StoredSession> for SessionListItem {
                 model: value.settings.model,
                 sandbox: value.settings.sandbox,
                 approval: value.settings.approval,
+                bypass_approvals_and_sandbox: value.settings.bypass_approvals_and_sandbox,
             },
         }
     }
@@ -873,11 +877,13 @@ mod tests {
             model: "gpt-5".to_string(),
             sandbox: "danger-full-access".to_string(),
             approval: "never".to_string(),
+            bypass_approvals_and_sandbox: true,
         });
 
         assert_eq!(mapped.model, "gpt-5");
         assert_eq!(mapped.sandbox, "danger-full-access");
         assert_eq!(mapped.approval, "never");
+        assert!(mapped.bypass_approvals_and_sandbox);
     }
 
     #[test]
@@ -1102,6 +1108,7 @@ mod tests {
                     model: String::new(),
                     sandbox: "danger-full-access".to_string(),
                     approval: "never".to_string(),
+                    bypass_approvals_and_sandbox: false,
                 }
             ),
             None
@@ -1114,6 +1121,7 @@ mod tests {
                     model: String::new(),
                     sandbox: "workspace-write".to_string(),
                     approval: "on-request".to_string(),
+                    bypass_approvals_and_sandbox: false,
                 }
             ),
             None

@@ -197,6 +197,7 @@ pub struct RunSettings {
     pub model: String,
     pub sandbox: String,
     pub approval: String,
+    pub bypass_approvals_and_sandbox: bool,
 }
 
 impl Default for RunSettings {
@@ -205,6 +206,7 @@ impl Default for RunSettings {
             model: String::new(),
             sandbox: "workspace-write".to_string(),
             approval: "never".to_string(),
+            bypass_approvals_and_sandbox: false,
         }
     }
 }
@@ -431,7 +433,9 @@ pub fn spawn_codex_run(
 fn build_codex_args(request: &RunRequest) -> Vec<String> {
     let mut args = Vec::new();
 
-    if !request.settings.approval.trim().is_empty() {
+    if request.settings.bypass_approvals_and_sandbox {
+        args.push("--dangerously-bypass-approvals-and-sandbox".to_string());
+    } else if !request.settings.approval.trim().is_empty() {
         args.push("--ask-for-approval".to_string());
         args.push(request.settings.approval.clone());
     }
@@ -444,7 +448,8 @@ fn build_codex_args(request: &RunRequest) -> Vec<String> {
         args.push(request.settings.model.clone());
     }
 
-    if !request.settings.sandbox.trim().is_empty() {
+    if !request.settings.bypass_approvals_and_sandbox && !request.settings.sandbox.trim().is_empty()
+    {
         args.push("--sandbox".to_string());
         args.push(request.settings.sandbox.clone());
     }
@@ -857,6 +862,26 @@ mod tests {
         assert!(args.windows(2).all(|window| window != ["exec", "resume"]));
         assert!(args.contains(&"exec".to_string()));
         assert!(!args.contains(&"resume".to_string()));
+    }
+
+    #[test]
+    fn bypass_exec_args_skip_approval_and_sandbox_flags() {
+        let args = build_codex_args(&RunRequest {
+            session_id: "run-1".to_string(),
+            prompt: "fix tests".to_string(),
+            workspace: "c:/repo".to_string(),
+            settings: RunSettings {
+                model: "gpt-5.2-codex".to_string(),
+                sandbox: "danger-full-access".to_string(),
+                approval: "never".to_string(),
+                bypass_approvals_and_sandbox: true,
+            },
+            codex_session_id: None,
+        });
+
+        assert!(args.contains(&"--dangerously-bypass-approvals-and-sandbox".to_string()));
+        assert!(!args.contains(&"--ask-for-approval".to_string()));
+        assert!(!args.contains(&"--sandbox".to_string()));
     }
 
     #[test]
