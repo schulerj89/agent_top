@@ -165,6 +165,7 @@ app.innerHTML = `
 
           <div class="detail-copy">
             <p id="detailWorkspace" class="detail-workspace"></p>
+            <p id="detailCodexSession" class="detail-codex-session"></p>
             <p id="detailPrompt" class="detail-prompt"></p>
             <p id="detailLatest" class="detail-latest"></p>
           </div>
@@ -213,6 +214,7 @@ const detailEvents = document.querySelector<HTMLElement>("#detailEvents")!;
 const detailCommands = document.querySelector<HTMLElement>("#detailCommands")!;
 const detailWarnings = document.querySelector<HTMLElement>("#detailWarnings")!;
 const detailWorkspace = document.querySelector<HTMLElement>("#detailWorkspace")!;
+const detailCodexSession = document.querySelector<HTMLElement>("#detailCodexSession")!;
 const detailPrompt = document.querySelector<HTMLElement>("#detailPrompt")!;
 const detailLatest = document.querySelector<HTMLElement>("#detailLatest")!;
 const detailMessage = document.querySelector<HTMLElement>("#detailMessage")!;
@@ -364,6 +366,7 @@ function renderSelectedSession() {
     detailCommands.textContent = "0";
     detailWarnings.textContent = "0";
     detailWorkspace.textContent = "";
+    detailCodexSession.textContent = "";
     detailPrompt.textContent = "";
     detailLatest.textContent = "";
     detailMessage.textContent = "Session details load on demand.";
@@ -381,6 +384,9 @@ function renderSelectedSession() {
   detailCommands.textContent = String(session.commands);
   detailWarnings.textContent = String(session.warnings);
   detailWorkspace.textContent = session.workspace;
+  detailCodexSession.textContent = session.codexSessionId
+    ? `Codex session: ${session.codexSessionId}`
+    : "Codex session: not captured yet";
   detailPrompt.textContent = session.prompt;
   detailLatest.textContent = `Latest: ${session.latestMessage}`;
   detailMessage.textContent = loadingDetail
@@ -544,6 +550,7 @@ async function startRun(prompt: string) {
         title: existing.title,
         prompt: trimmedPrompt,
         workspace: currentWorkspace,
+        codex_session_id: existing.codexSessionId,
         lifecycle: "launching",
         status: "Launching",
         updated_at: String(Date.now()),
@@ -577,6 +584,7 @@ async function startRun(prompt: string) {
       title: promptTitle(trimmedPrompt),
       prompt: trimmedPrompt,
       workspace: currentWorkspace,
+      codex_session_id: null,
       lifecycle: "launching",
       status: "Launching",
       updated_at: String(Date.now()),

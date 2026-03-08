@@ -27,6 +27,7 @@ export type SessionListItem = {
   title: string;
   prompt: string;
   workspace: string;
+  codex_session_id?: string | null;
   lifecycle: Lifecycle;
   status: string;
   updated_at: string;
@@ -54,6 +55,7 @@ export type SessionState = {
   title: string;
   prompt: string;
   workspace: string;
+  codexSessionId: string | null;
   settings: SessionSettings;
   status: string;
   lifecycle: Lifecycle;
@@ -78,6 +80,7 @@ export function createSessionState(record: SessionListItem): SessionState {
     title: record.title,
     prompt: record.prompt,
     workspace: record.workspace,
+    codexSessionId: record.codex_session_id ?? null,
     settings: record.settings,
     status: record.status,
     lifecycle: record.lifecycle,
@@ -98,6 +101,7 @@ export function mergeSessionSummary(session: SessionState, summary: SessionListI
     title: summary.title,
     prompt: summary.prompt,
     workspace: summary.workspace,
+    codexSessionId: summary.codex_session_id ?? session.codexSessionId,
     settings: summary.settings,
     status: summary.status,
     lifecycle: summary.lifecycle,
