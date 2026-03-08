@@ -248,6 +248,7 @@ p {
   width: 18px !important;
   height: 18px;
   margin: 0;
+  vertical-align: text-top;
 }
 
 .checkbox-control span {
@@ -256,6 +257,7 @@ p {
   text-align: left;
   font-size: 0.95rem;
   color: #f6f4ef;
+  vertical-align: text-top;
 }
 
 .field input,
