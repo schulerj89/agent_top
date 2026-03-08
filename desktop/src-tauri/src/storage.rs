@@ -13,6 +13,7 @@ pub struct StoredSession {
     pub title: String,
     pub prompt: String,
     pub workspace: String,
+    pub codex_session_id: Option<String>,
     pub lifecycle: SessionLifecycle,
     pub status: String,
     pub created_at: i64,
@@ -93,6 +94,7 @@ impl SessionStore {
                     title text not null,
                     prompt text not null,
                     workspace text not null,
+                    codex_session_id text,
                     lifecycle text not null,
                     status text not null,
                     created_at integer not null,
@@ -128,7 +130,30 @@ impl SessionStore {
                     on events(session_id, ts);
                 "#,
             )
-            .map_err(|error| error.to_string())
+            .map_err(|error| error.to_string())?;
+
+        let has_codex_session_id = {
+            let mut statement = connection
+                .prepare("pragma table_info(sessions)")
+                .map_err(|error| error.to_string())?;
+            let columns = statement
+                .query_map([], |row| row.get::<_, String>(1))
+                .map_err(|error| error.to_string())?;
+
+            columns
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|error| error.to_string())?
+                .into_iter()
+                .any(|name| name == "codex_session_id")
+        };
+
+        if !has_codex_session_id {
+            connection
+                .execute("alter table sessions add column codex_session_id text", [])
+                .map_err(|error| error.to_string())?;
+        }
+
+        Ok(())
     }
 
     pub fn create_session(&self, input: &CreateSessionInput) -> Result<StoredSession, String> {
@@ -141,9 +166,9 @@ impl SessionStore {
                 r#"
                 insert into sessions (
                     id, title, prompt, workspace, lifecycle, status, created_at, updated_at,
-                    last_event_at, last_message, total_events, command_count, warning_count,
+                    codex_session_id, last_event_at, last_message, total_events, command_count, warning_count,
                     error_count, model, sandbox, approval
-                ) values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?7, null, null, 0, 0, 0, 0, ?8, ?9, ?10)
+                ) values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?7, null, null, null, 0, 0, 0, 0, ?8, ?9, ?10)
                 "#,
                 params![
                     input.id,
@@ -377,6 +402,17 @@ impl SessionStore {
         Ok(deleted > 0)
     }
 
+    pub fn set_codex_session_id(&self, session_id: &str, codex_session_id: &str) -> Result<(), String> {
+        self.open()?
+            .execute(
+                "update sessions set codex_session_id = ?2 where id = ?1",
+                params![session_id, codex_session_id],
+            )
+            .map_err(|error| error.to_string())?;
+
+        Ok(())
+    }
+
     fn open(&self) -> Result<Connection, String> {
         Connection::open(&self.path).map_err(|error| error.to_string())
     }
@@ -397,6 +433,7 @@ fn read_session(row: &rusqlite::Row<'_>) -> rusqlite::Result<StoredSession> {
         title: row.get("title")?,
         prompt: row.get("prompt")?,
         workspace: row.get("workspace")?,
+        codex_session_id: row.get("codex_session_id")?,
         lifecycle: lifecycle_from_str(&row.get::<_, String>("lifecycle")?)?,
         status: row.get("status")?,
         created_at: row.get("created_at")?,
@@ -706,5 +743,34 @@ mod tests {
         assert_eq!(session.settings.sandbox, "danger-full-access");
         assert_eq!(session.settings.approval, "on-request");
         assert_eq!(session.last_message.as_deref(), Some("waiting for first event"));
+    }
+
+    #[test]
+    fn stores_codex_session_ids() {
+        let (_dir, store) = store();
+        store
+            .create_session(&CreateSessionInput {
+                id: "run-1".to_string(),
+                prompt: "prompt".to_string(),
+                workspace: "c:/repo".to_string(),
+                lifecycle: SessionLifecycle::Launching,
+                status: "Launching".to_string(),
+                settings: test_settings(),
+            })
+            .expect("create session");
+
+        store
+            .set_codex_session_id("run-1", "019ccdee-5bdb-7602-95df-d6edbfd0083c")
+            .expect("set codex session id");
+
+        let session = store
+            .get_session("run-1")
+            .expect("get session")
+            .expect("session exists");
+
+        assert_eq!(
+            session.codex_session_id.as_deref(),
+            Some("019ccdee-5bdb-7602-95df-d6edbfd0083c")
+        );
     }
 }

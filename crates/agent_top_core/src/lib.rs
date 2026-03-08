@@ -215,6 +215,7 @@ pub struct RunRequest {
     pub prompt: String,
     pub workspace: String,
     pub settings: RunSettings,
+    pub codex_session_id: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -364,9 +365,8 @@ pub fn start_codex_run(request: RunRequest) -> ManagedRun {
         }
 
         command
-            .arg("exec")
-            .arg("--json")
-            .arg("--skip-git-repo-check");
+            .arg("-C")
+            .arg(request.workspace.as_str());
 
         if !request.settings.model.trim().is_empty() {
             command.arg("--model").arg(request.settings.model.as_str());
@@ -378,9 +378,14 @@ pub fn start_codex_run(request: RunRequest) -> ManagedRun {
                 .arg(request.settings.sandbox.as_str());
         }
 
+        command.arg("exec");
+        if let Some(codex_session_id) = request.codex_session_id.as_deref() {
+            command.arg("resume").arg(codex_session_id);
+        }
+
         let spawned = command
-            .arg("-C")
-            .arg(request.workspace.as_str())
+            .arg("--json")
+            .arg("--skip-git-repo-check")
             .arg(request.prompt.as_str())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -447,6 +452,7 @@ pub fn spawn_codex_run(
         prompt,
         workspace,
         settings,
+        codex_session_id: None,
     })
     .receiver
 }

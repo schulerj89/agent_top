@@ -202,6 +202,7 @@ fn start_run(
         request.prompt,
         workspace,
         settings,
+        None,
     )?;
     Ok(StartRunResponse { session_id })
 }
@@ -261,6 +262,7 @@ fn retry_run(
         record.prompt,
         record.workspace,
         settings,
+        None,
     )?;
     Ok(StartRunResponse { session_id })
 }
@@ -301,6 +303,10 @@ fn continue_session(
         run.prompt,
         workspace,
         settings,
+        state
+            .store
+            .get_session(&request.session_id)?
+            .and_then(|session| session.codex_session_id),
     )?;
     Ok(StartRunResponse {
         session_id: request.session_id,
@@ -432,12 +438,14 @@ fn launch_run(
     prompt: String,
     workspace: String,
     settings: RunSettings,
+    codex_session_id: Option<String>,
 ) -> Result<(), String> {
     let managed = start_codex_run(RunRequest {
         session_id: session_id.clone(),
         prompt,
         workspace,
         settings,
+        codex_session_id,
     });
 
     register_run(state, &session_id, managed.controller.clone())?;
@@ -579,6 +587,9 @@ fn persist_runner_update(
 ) -> Result<(), String> {
     let payload_json = serde_json::to_string(event).ok();
     store.append_event(session_id, event, payload_json.as_deref())?;
+    if let Some(codex_session_id) = extract_codex_session_id(event) {
+        store.set_codex_session_id(session_id, &codex_session_id)?;
+    }
 
     let lifecycle = lifecycle_for_event(event, finished);
     let status = if finished {
@@ -789,6 +800,7 @@ mod tests {
             title: "Prompt".to_string(),
             prompt: "prompt".to_string(),
             workspace: "c:/repo".to_string(),
+            codex_session_id: Some("019ccdee-5bdb-7602-95df-d6edbfd0083c".to_string()),
             lifecycle: SessionLifecycle::Running,
             status: "Running".to_string(),
             created_at: 1,
@@ -835,6 +847,20 @@ mod tests {
         assert_eq!(mapped.model, "gpt-5");
         assert_eq!(mapped.sandbox, "danger-full-access");
         assert_eq!(mapped.approval, "never");
+    }
+
+    #[test]
+    fn extracts_codex_session_id_from_thread_started_event() {
+        let event = Event::new(
+            "thread",
+            EventKind::Status,
+            "thread started: 019ccdee-5bdb-7602-95df-d6edbfd0083c",
+        );
+
+        assert_eq!(
+            extract_codex_session_id(&event).as_deref(),
+            Some("019ccdee-5bdb-7602-95df-d6edbfd0083c")
+        );
     }
 
     #[test]
@@ -942,4 +968,12 @@ mod tests {
         );
     }
 
+}
+
+fn extract_codex_session_id(event: &Event) -> Option<String> {
+    event.message
+        .strip_prefix("thread started: ")
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
 }

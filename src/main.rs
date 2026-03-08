@@ -84,6 +84,7 @@ fn run_codex(prompt: &str) {
         prompt: prompt.to_string(),
         workspace: workspace.to_string_lossy().into_owned(),
         settings: RunSettings::default(),
+        codex_session_id: None,
     });
 
     render_dashboard(&mut terminal, &summary);
@@ -379,6 +380,7 @@ impl App {
             prompt,
             workspace: self.workspace.clone(),
             settings: self.settings.clone(),
+            codex_session_id: None,
         };
         let ManagedRun {
             receiver,
