@@ -583,6 +583,10 @@ fn normalize_workspace_display(path: &str) -> String {
 }
 
 fn resume_codex_session_id(session: &StoredSession, requested_workspace: &str) -> Option<String> {
+    if session.total_events == 0 {
+        return None;
+    }
+
     if normalize_workspace_display(&session.workspace) == normalize_workspace_display(requested_workspace)
     {
         session.codex_session_id.clone()
@@ -1007,6 +1011,33 @@ mod tests {
         );
         assert_eq!(
             resume_codex_session_id(&session, r"C:\Users\joshs\Projects\repo-b"),
+            None
+        );
+    }
+
+    #[test]
+    fn does_not_resume_codex_session_for_first_run_state() {
+        let session = StoredSession {
+            id: "run-1".to_string(),
+            title: "Prompt".to_string(),
+            prompt: "prompt".to_string(),
+            workspace: r"C:\Users\joshs\Projects\repo-a".to_string(),
+            codex_session_id: Some("019ccdee-5bdb-7602-95df-d6edbfd0083c".to_string()),
+            lifecycle: SessionLifecycle::Launching,
+            status: "Launching".to_string(),
+            created_at: 1,
+            updated_at: 2,
+            last_event_at: None,
+            last_message: None,
+            total_events: 0,
+            command_count: 0,
+            warning_count: 0,
+            error_count: 0,
+            settings: RunSettings::default(),
+        };
+
+        assert_eq!(
+            resume_codex_session_id(&session, r"C:\Users\joshs\Projects\repo-a"),
             None
         );
     }

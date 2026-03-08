@@ -358,6 +358,7 @@ pub fn start_codex_run(request: RunRequest) -> ManagedRun {
         let executable = if cfg!(windows) { "codex.cmd" } else { "codex" };
         let mut command = Command::new(executable);
         command.args(build_codex_args(&request));
+        command.current_dir(request.workspace.as_str());
 
         let spawned = command.stdout(Stdio::piped()).stderr(Stdio::piped()).spawn();
 
