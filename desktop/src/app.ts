@@ -259,7 +259,7 @@ export function startApp(dom: AppDom) {
       dom.detailEvents.textContent = "0";
       dom.detailCommands.textContent = "0";
       dom.detailWarnings.textContent = "0";
-      dom.detailWorkspace.textContent = currentWorkspace ? `Workspace: ${currentWorkspace}` : "";
+      dom.detailWorkspace.textContent = currentWorkspace ? `Current workspace: ${currentWorkspace}` : "";
       dom.detailCodexSession.textContent = draftingNewSession
         ? "A new thread starts as soon as you launch Codex."
         : "";
@@ -292,11 +292,11 @@ export function startApp(dom: AppDom) {
     dom.detailEvents.textContent = String(session.totalEvents);
     dom.detailCommands.textContent = String(session.commands);
     dom.detailWarnings.textContent = String(session.warnings);
-    dom.detailWorkspace.textContent = session.workspace;
+    dom.detailWorkspace.textContent = `Current workspace: ${currentWorkspace || session.workspace}`;
     dom.detailCodexSession.textContent = session.codexSessionId
-      ? `Codex session: ${session.codexSessionId}`
-      : "Codex session: not captured yet";
-    dom.detailPrompt.textContent = session.prompt;
+      ? `Codex session: ${session.codexSessionId} · Thread workspace: ${session.workspace}`
+      : `Codex session: not captured yet · Thread workspace: ${session.workspace}`;
+    dom.detailPrompt.textContent = `Prompt: ${session.prompt}`;
     dom.detailLatest.textContent = `Latest: ${session.latestMessage}`;
     dom.detailMessage.textContent = loadingDetail
       ? "Loading session events..."
@@ -564,6 +564,7 @@ export function startApp(dom: AppDom) {
         defaultWorkspace = selected;
         currentWorkspace = selected;
         dom.workspaceLabel.textContent = selected;
+        renderSelectedSession();
         setComposerMessage("Workspace updated.");
       }
     }, "Unable to choose workspace.");
