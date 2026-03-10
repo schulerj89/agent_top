@@ -153,6 +153,28 @@ export function startApp(dom: AppDom) {
     applyComposerState(defaultWorkspace, "", defaultSettings);
   }
 
+  function formatUpdatedAt(value: string): string {
+    const millis = Number(value);
+    if (!Number.isFinite(millis) || millis <= 0) {
+      return "";
+    }
+
+    const diffMs = Date.now() - millis;
+    const diffMinutes = Math.max(0, Math.round(diffMs / 60000));
+    if (diffMinutes < 1) {
+      return "now";
+    }
+    if (diffMinutes < 60) {
+      return `${diffMinutes}m`;
+    }
+    const diffHours = Math.round(diffMinutes / 60);
+    if (diffHours < 24) {
+      return `${diffHours}h`;
+    }
+    const diffDays = Math.round(diffHours / 24);
+    return `${diffDays}d`;
+  }
+
   function promptTitle(prompt: string): string {
     const words = prompt.trim().split(/\s+/).filter(Boolean);
     const short = words.slice(0, 5).join(" ");
@@ -173,10 +195,20 @@ export function startApp(dom: AppDom) {
               button.dataset.active = "true";
             }
             button.title = navTitle;
+            const statusLabel = session.running ? "Active" : session.status;
+            const updatedAt = formatUpdatedAt(session.updatedAt);
             button.innerHTML = `
-              <span class="session-nav-title"></span>
+              <span class="session-nav-row">
+                <span class="session-nav-title"></span>
+                <span class="session-nav-time">${updatedAt}</span>
+              </span>
+              <span class="session-nav-meta">
+                <span class="session-nav-status">${statusLabel}</span>
+                <span class="session-nav-latest"></span>
+              </span>
             `;
             button.querySelector<HTMLElement>(".session-nav-title")!.textContent = navTitle;
+            button.querySelector<HTMLElement>(".session-nav-latest")!.textContent = session.latestMessage;
 
             button.addEventListener("click", async () => {
               await selectSession(session.id);
@@ -197,20 +229,35 @@ export function startApp(dom: AppDom) {
 
     if (!session) {
       applyComposerState(defaultWorkspace, dom.promptInput.value, defaultSettings);
-      dom.detailTitle.textContent = "No session selected";
+      dom.detailTitle.textContent = draftingNewSession ? "New thread" : "No thread selected";
       dom.detailSubtitle.textContent = draftingNewSession
-        ? "Compose a prompt to start a new session."
-        : "Choose a session from the left rail.";
+        ? "Draft a prompt below to start a new Codex thread."
+        : "Choose a thread from the left rail or start a new one.";
       dom.detailStatus.textContent = "-";
       dom.detailEvents.textContent = "0";
       dom.detailCommands.textContent = "0";
       dom.detailWarnings.textContent = "0";
-      dom.detailWorkspace.textContent = "";
-      dom.detailCodexSession.textContent = "";
-      dom.detailPrompt.textContent = "";
-      dom.detailLatest.textContent = "";
-      dom.detailMessage.textContent = "Session details load on demand.";
-      dom.detailEventsList.replaceChildren();
+      dom.detailWorkspace.textContent = currentWorkspace ? `Workspace: ${currentWorkspace}` : "";
+      dom.detailCodexSession.textContent = draftingNewSession
+        ? "A new thread starts as soon as you launch Codex."
+        : "";
+      dom.detailPrompt.textContent = draftingNewSession
+        ? "Use the composer below to describe the next task."
+        : "";
+      dom.detailLatest.textContent = draftingNewSession
+        ? "Tip: selecting an existing thread will continue its history when settings and workspace still match."
+        : "";
+      dom.detailMessage.textContent = draftingNewSession
+        ? "New thread draft is ready."
+        : "Thread details load on demand.";
+      const empty = document.createElement("li");
+      empty.className = "empty-thread-stage";
+      empty.innerHTML = `
+        <div class="empty-thread-mark">+</div>
+        <h3>${draftingNewSession ? "Start a fresh Codex thread" : "Select a thread to inspect its timeline"}</h3>
+        <p>${draftingNewSession ? "Prompts, settings, and workspace are staged below. Run once to create the thread and persist its event history." : "The left rail behaves like a thread navigator. Pick one to load events, continue it, retry it, or delete it."}</p>
+      `;
+      dom.detailEventsList.replaceChildren(empty);
       dom.cancelRunButton.disabled = true;
       dom.retryRunButton.disabled = true;
       dom.deleteSessionButton.disabled = true;
@@ -218,7 +265,7 @@ export function startApp(dom: AppDom) {
     }
 
     dom.detailTitle.textContent = session.title;
-    dom.detailSubtitle.textContent = `${session.id} | ${session.updatedAt}`;
+    dom.detailSubtitle.textContent = `${session.id} · updated ${formatUpdatedAt(session.updatedAt) || session.updatedAt}`;
     dom.detailStatus.textContent = session.status;
     dom.detailEvents.textContent = String(session.totalEvents);
     dom.detailCommands.textContent = String(session.commands);
@@ -232,8 +279,8 @@ export function startApp(dom: AppDom) {
     dom.detailMessage.textContent = loadingDetail
       ? "Loading session events..."
       : session.eventsLoaded
-        ? "Session events are loaded from SQLite."
-        : "Select a session to load its events.";
+      ? "Thread events are loaded from SQLite."
+      : "Select a thread to load its events.";
     dom.cancelRunButton.disabled = !session.running;
     dom.retryRunButton.disabled = session.running;
     dom.deleteSessionButton.disabled = session.running;
