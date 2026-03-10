@@ -1,11 +1,8 @@
 # agent_top
 
-`agent_top` is a Codex runner and monitor built around a shared Rust core.
+`agent_top` is a desktop Codex runner and monitor built around a shared Rust core.
 
-It currently ships two interfaces:
-
-- a Rust terminal UI for local monitoring and replay
-- a Tauri desktop app for persistent thread-based workflows
+It is centered on a Tauri desktop app for persistent thread-based workflows.
 
 ## What It Does
 
@@ -15,7 +12,6 @@ It currently ships two interfaces:
 - continue an existing thread with a new run attempt
 - retry a thread by launching another run attempt
 - persist thread metadata and event history in SQLite
-- replay saved event logs in the terminal UI
 
 ## Architecture
 
@@ -28,14 +24,6 @@ It currently ships two interfaces:
 - tracking summaries, file touches, and command activity
 - cancellation support
 - resume eligibility checks
-
-### Terminal UI
-
-`src/main.rs` provides a `ratatui`/`crossterm` interface for:
-
-- starting runs
-- watching live status and event streams
-- replaying saved logs
 
 ### Desktop App
 
@@ -50,32 +38,6 @@ The desktop app now uses a thread/run-attempt model:
 - a thread represents the long-lived conversation or workspace context
 - each launch, continue, or retry creates a new run attempt inside that thread
 - the UI shows threads in the left rail and resolves the selected timeline from the active or latest run attempt
-
-## Terminal Usage
-
-Run the TUI:
-
-```powershell
-cargo run --
-```
-
-Replay a saved log:
-
-```powershell
-cargo run -- replay sample\session.log
-```
-
-Start a run directly:
-
-```powershell
-cargo run -- run "Reply with the single word ready"
-```
-
-Inside the TUI:
-
-- `n` starts a new run
-- `s` opens settings
-- `q` quits from the home screen
 
 ## Desktop Usage
 
@@ -109,27 +71,6 @@ The current desktop and terminal flows expose:
 - `sandbox`
 - `approval`
 - bypass behavior where supported by the desktop flow
-
-## Event Replay Format
-
-Replay mode accepts plain-text logs in this format:
-
-```text
-timestamp|kind|message
-```
-
-Supported kinds:
-
-- `status`
-- `command`
-- `file`
-- `warning`
-- `error`
-- `note`
-
-Sample log:
-
-- `sample/session.log`
 
 ## Build And Test
 

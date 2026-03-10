@@ -814,25 +814,25 @@ mod tests {
             }),
         );
         summary.record(
-            Event::new("file", EventKind::File, "src/main.rs").with_details(EventDetails {
+            Event::new("file", EventKind::File, "desktop/src/app.ts").with_details(EventDetails {
                 command: None,
                 file: Some(FileDetails {
-                    path: "src/main.rs".to_string(),
-                    group: "src".to_string(),
+                    path: "desktop/src/app.ts".to_string(),
+                    group: "desktop".to_string(),
                 }),
             }),
         );
 
         assert_eq!(summary.analytics.command_runs.len(), 1);
         assert_eq!(summary.analytics.exit_status_counts.get("0"), Some(&1));
-        assert_eq!(summary.analytics.file_groups.get("src"), Some(&1));
+        assert_eq!(summary.analytics.file_groups.get("desktop"), Some(&1));
     }
 
     #[test]
     fn stream_stdout_emits_all_parsed_events() {
         let input = Cursor::new(
             r#"{"type":"thread.started","thread_id":"abc"}
-{"type":"item.completed","item":{"type":"command_execution","command":"cargo test","exit_code":0,"duration_ms":12,"aggregated_output":"ok","path":"src/main.rs"}}"#,
+{"type":"item.completed","item":{"type":"command_execution","command":"cargo test","exit_code":0,"duration_ms":12,"aggregated_output":"ok","path":"desktop/src/app.ts"}}"#,
         );
         let (sender, receiver) = mpsc::channel();
 
