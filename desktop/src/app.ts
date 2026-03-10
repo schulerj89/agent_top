@@ -181,39 +181,60 @@ export function startApp(dom: AppDom) {
     return short || "Untitled session";
   }
 
+  function sessionGroups(source: SessionState[]) {
+    const running = source.filter((session) => session.running);
+    const idle = source.filter((session) => !session.running);
+    return [
+      { label: "Active", sessions: running },
+      { label: "Recent", sessions: idle },
+    ].filter((group) => group.sessions.length > 0);
+  }
+
   function renderSessionNav() {
     const visible = sortedVisibleSessions();
     dom.sessionNav.replaceChildren(
       ...(visible.length > 0
-        ? visible.map((session) => {
-            const navTitle = promptTitle(session.prompt);
-            const button = document.createElement("button");
-            button.type = "button";
-            button.className = "session-nav-item";
-            button.dataset.running = String(session.running);
-            if (session.id === selectedSessionId) {
-              button.dataset.active = "true";
-            }
-            button.title = navTitle;
-            const statusLabel = session.running ? "Active" : session.status;
-            const updatedAt = formatUpdatedAt(session.updatedAt);
-            button.innerHTML = `
-              <span class="session-nav-row">
-                <span class="session-nav-title"></span>
-                <span class="session-nav-time">${updatedAt}</span>
-              </span>
-              <span class="session-nav-meta">
-                <span class="session-nav-status">${statusLabel}</span>
-                <span class="session-nav-latest"></span>
-              </span>
-            `;
-            button.querySelector<HTMLElement>(".session-nav-title")!.textContent = navTitle;
-            button.querySelector<HTMLElement>(".session-nav-latest")!.textContent = session.latestMessage;
+        ? sessionGroups(visible).map((group) => {
+            const section = document.createElement("section");
+            section.className = "session-nav-group";
 
-            button.addEventListener("click", async () => {
-              await selectSession(session.id);
-            });
-            return button;
+            const label = document.createElement("p");
+            label.className = "session-nav-group-label";
+            label.textContent = group.label;
+            section.append(label);
+
+            for (const session of group.sessions) {
+              const navTitle = promptTitle(session.prompt);
+              const button = document.createElement("button");
+              button.type = "button";
+              button.className = "session-nav-item";
+              button.dataset.running = String(session.running);
+              if (session.id === selectedSessionId) {
+                button.dataset.active = "true";
+              }
+              button.title = navTitle;
+              const statusLabel = session.running ? "Active" : session.status;
+              const updatedAt = formatUpdatedAt(session.updatedAt);
+              button.innerHTML = `
+                <span class="session-nav-row">
+                  <span class="session-nav-title"></span>
+                  <span class="session-nav-time">${updatedAt}</span>
+                </span>
+                <span class="session-nav-meta">
+                  <span class="session-nav-status">${statusLabel}</span>
+                  <span class="session-nav-latest"></span>
+                </span>
+              `;
+              button.querySelector<HTMLElement>(".session-nav-title")!.textContent = navTitle;
+              button.querySelector<HTMLElement>(".session-nav-latest")!.textContent = session.latestMessage;
+
+              button.addEventListener("click", async () => {
+                await selectSession(session.id);
+              });
+              section.append(button);
+            }
+
+            return section;
           })
         : [
             Object.assign(document.createElement("p"), {
@@ -292,9 +313,14 @@ export function startApp(dom: AppDom) {
             const item = document.createElement("li");
             item.className = `event-item kind-${event.kind}`;
             item.innerHTML = `
-              <span class="event-time">${event.timestamp}</span>
-              <span class="event-kind">${event.kind}</span>
-              <span class="event-message"></span>
+              <span class="event-marker"></span>
+              <div class="event-body">
+                <div class="event-heading">
+                  <span class="event-kind">${event.kind}</span>
+                  <span class="event-time">${event.timestamp}</span>
+                </div>
+                <span class="event-message"></span>
+              </div>
             `;
             item.querySelector<HTMLElement>(".event-message")!.textContent = event.message;
             return item;

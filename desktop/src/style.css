@@ -214,9 +214,22 @@ strong {
 .session-nav {
   display: grid;
   align-content: start;
-  gap: 8px;
+  gap: 14px;
   overflow: auto;
   padding-right: 2px;
+}
+
+.session-nav-group {
+  display: grid;
+  gap: 8px;
+}
+
+.session-nav-group-label {
+  padding: 0 8px;
+  font-size: 0.72rem;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: #707988;
 }
 
 .session-nav-item {
@@ -470,7 +483,7 @@ strong {
 .detail-events {
   display: grid;
   align-content: start;
-  gap: 10px;
+  gap: 14px;
   list-style: none;
   margin: 8px 0 0;
   padding: 0;
@@ -480,13 +493,51 @@ strong {
 
 .event-item {
   display: grid;
-  grid-template-columns: 92px 88px minmax(0, 1fr);
+  grid-template-columns: 28px minmax(0, 1fr);
   gap: 12px;
   align-items: start;
   border-radius: 16px;
   padding: 12px 14px;
   background: rgba(255, 255, 255, 0.035);
   border: 1px solid rgba(255, 255, 255, 0.03);
+}
+
+.event-marker {
+  position: relative;
+  display: block;
+  width: 12px;
+  height: 12px;
+  margin-top: 8px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.18);
+}
+
+.event-marker::after {
+  content: "";
+  position: absolute;
+  top: 15px;
+  bottom: -28px;
+  left: 50%;
+  width: 1px;
+  transform: translateX(-50%);
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.detail-events > li:last-child .event-marker::after,
+.empty-thread-stage .event-marker::after {
+  display: none;
+}
+
+.event-body {
+  display: grid;
+  gap: 6px;
+}
+
+.event-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
 }
 
 .event-time {
@@ -496,6 +547,7 @@ strong {
 .event-kind {
   text-transform: uppercase;
   letter-spacing: 0.08em;
+  font-size: 0.76rem;
 }
 
 .event-message {
@@ -596,24 +648,48 @@ strong {
   color: #67d7e6;
 }
 
+.kind-status .event-marker {
+  background: #67d7e6;
+}
+
 .kind-command .event-kind {
   color: var(--accent);
+}
+
+.kind-command .event-marker {
+  background: var(--accent);
 }
 
 .kind-file .event-kind {
   color: #75d48b;
 }
 
+.kind-file .event-marker {
+  background: #75d48b;
+}
+
 .kind-warning .event-kind {
   color: #f4d36a;
+}
+
+.kind-warning .event-marker {
+  background: #f4d36a;
 }
 
 .kind-error .event-kind {
   color: #ff8a8a;
 }
 
+.kind-error .event-marker {
+  background: #ff8a8a;
+}
+
 .kind-note .event-kind {
   color: #a9b0bd;
+}
+
+.kind-note .event-marker {
+  background: #a9b0bd;
 }
 
 @media (max-width: 1180px) {
@@ -668,6 +744,16 @@ strong {
 
   .event-item {
     grid-template-columns: 1fr;
+  }
+
+  .event-marker,
+  .event-marker::after {
+    display: none;
+  }
+
+  .event-heading {
+    flex-direction: column;
+    align-items: start;
   }
 
   .session-nav-row,
