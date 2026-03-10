@@ -160,15 +160,6 @@ impl SessionStore {
 
                 create index if not exists idx_sessions_updated_at
                     on sessions(updated_at desc);
-
-                create index if not exists idx_sessions_thread_attempt
-                    on sessions(thread_id, attempt_no desc);
-
-                create index if not exists idx_events_session_sequence
-                    on events(session_id, sequence_no);
-
-                create index if not exists idx_events_session_ts
-                    on events(session_id, ts);
                 "#,
             )
             .map_err(|error| error.to_string())?;
@@ -245,6 +236,24 @@ impl SessionStore {
         connection
             .execute(
                 "update sessions set thread_id = id where trim(thread_id) = ''",
+                [],
+            )
+            .map_err(|error| error.to_string())?;
+        connection
+            .execute(
+                "create index if not exists idx_sessions_thread_attempt on sessions(thread_id, attempt_no desc)",
+                [],
+            )
+            .map_err(|error| error.to_string())?;
+        connection
+            .execute(
+                "create index if not exists idx_events_session_sequence on events(session_id, sequence_no)",
+                [],
+            )
+            .map_err(|error| error.to_string())?;
+        connection
+            .execute(
+                "create index if not exists idx_events_session_ts on events(session_id, ts)",
                 [],
             )
             .map_err(|error| error.to_string())?;
