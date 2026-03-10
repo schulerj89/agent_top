@@ -837,7 +837,15 @@ fn event_kind_to_str(value: EventKind) -> &'static str {
 }
 
 fn event_kind_from_str(value: &str) -> rusqlite::Result<EventKind> {
-    EventKind::parse(value).ok_or(rusqlite::Error::InvalidQuery)
+    match value.trim() {
+        "status" => Ok(EventKind::Status),
+        "command" => Ok(EventKind::Command),
+        "file" => Ok(EventKind::File),
+        "warning" => Ok(EventKind::Warning),
+        "error" => Ok(EventKind::Error),
+        "note" => Ok(EventKind::Note),
+        _ => Err(rusqlite::Error::InvalidQuery),
+    }
 }
 
 fn now_ms() -> i64 {

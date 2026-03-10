@@ -24,17 +24,6 @@ pub enum EventKind {
 }
 
 impl EventKind {
-    pub fn parse(value: &str) -> Option<Self> {
-        match value.trim() {
-            "status" => Some(Self::Status),
-            "command" => Some(Self::Command),
-            "file" => Some(Self::File),
-            "warning" => Some(Self::Warning),
-            "error" => Some(Self::Error),
-            "note" => Some(Self::Note),
-            _ => None,
-        }
-    }
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
@@ -98,7 +87,6 @@ pub struct Analytics {
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct Summary {
-    pub source: String,
     pub current_status: Option<String>,
     pub commands: usize,
     pub warnings: usize,
@@ -111,13 +99,6 @@ pub struct Summary {
 }
 
 impl Summary {
-    pub fn with_source(source: impl Into<String>) -> Self {
-        Self {
-            source: source.into(),
-            ..Self::default()
-        }
-    }
-
     pub fn record(&mut self, event: Event) {
         self.total_events += 1;
 
@@ -289,15 +270,6 @@ pub struct ManagedRun {
 pub fn next_session_id() -> String {
     let count = SESSION_COUNTER.fetch_add(1, Ordering::Relaxed);
     format!("session-{}-{count}", unix_millis())
-}
-
-pub fn parse_event(line: &str) -> Option<Event> {
-    let mut parts = line.splitn(3, '|');
-    let timestamp = parts.next()?.trim().to_string();
-    let kind = EventKind::parse(parts.next()?)?;
-    let message = parts.next()?.trim().to_string();
-
-    Some(Event::new(timestamp, kind, message))
 }
 
 pub fn parse_codex_event(line: &str) -> Event {
@@ -800,7 +772,7 @@ mod tests {
 
     #[test]
     fn summary_aggregates_command_and_file_analytics() {
-        let mut summary = Summary::with_source("test");
+        let mut summary = Summary::default();
         summary.record(
             Event::new("command", EventKind::Command, "completed").with_details(EventDetails {
                 command: Some(CommandDetails {
