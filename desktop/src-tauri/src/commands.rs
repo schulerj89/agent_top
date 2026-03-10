@@ -14,12 +14,15 @@ use crate::runtime::{
     has_active_run, launch_run, reconcile_cancelled_orphaned_session, resume_codex_session_id,
     validate_request,
 };
-use crate::storage::{CreateSessionInput, SessionRunUpdate, StoredEvent, StoredSession};
+use crate::storage::{CreateSessionInput, StoredEvent, StoredSession, StoredThread};
 use crate::Pipe;
 
 #[derive(Clone, Serialize)]
 pub struct SessionListItem {
     pub session_id: String,
+    pub active_run_id: Option<String>,
+    pub latest_run_id: String,
+    pub attempt_count: usize,
     pub title: String,
     pub prompt: String,
     pub workspace: String,
@@ -50,6 +53,7 @@ pub struct SessionEventPayload {
 #[derive(Clone, Serialize)]
 pub struct EventPayload {
     pub session_id: String,
+    pub run_id: String,
     pub timestamp: String,
     pub kind: String,
     pub message: String,
@@ -61,7 +65,7 @@ pub struct EventPayload {
 pub fn bootstrap(state: State<'_, AppState>) -> Result<BootstrapPayload, String> {
     let sessions = state
         .store
-        .list_sessions(Some(50))?
+        .list_threads(Some(50))?
         .into_iter()
         .map(SessionListItem::from)
         .collect();
@@ -76,7 +80,7 @@ pub fn bootstrap(state: State<'_, AppState>) -> Result<BootstrapPayload, String>
 pub fn list_sessions(state: State<'_, AppState>) -> Result<Vec<SessionListItem>, String> {
     state
         .store
-        .list_sessions(Some(200))?
+        .list_threads(Some(200))?
         .into_iter()
         .map(SessionListItem::from)
         .collect::<Vec<_>>()
@@ -90,7 +94,7 @@ pub fn get_session(
 ) -> Result<Option<SessionListItem>, String> {
     state
         .store
-        .get_session(&request.session_id)?
+        .get_thread(&request.session_id)?
         .map(SessionListItem::from)
         .pipe(Ok)
 }
@@ -100,9 +104,12 @@ pub fn get_session_events(
     state: State<'_, AppState>,
     request: SessionLookupRequest,
 ) -> Result<Vec<SessionEventPayload>, String> {
+    let Some(run_id) = state.store.selected_run_id_for_thread(&request.session_id)? else {
+        return Ok(Vec::new());
+    };
     state
         .store
-        .list_events(&request.session_id, request.limit)?
+        .list_events(&run_id, request.limit)?
         .into_iter()
         .map(SessionEventPayload::from)
         .collect::<Vec<_>>()
@@ -125,14 +132,19 @@ pub fn start_run(
 ) -> Result<StartRunResponse, String> {
     validate_request(&request)?;
     let workspace = crate::app_state::normalize_workspace_display(&request.workspace);
-    let session_id = format!(
+    let thread_id = format!(
+        "thread-{}",
+        state.next_thread_id.fetch_add(1, Ordering::Relaxed)
+    );
+    let run_id = format!(
         "run-{}",
         state.next_session_id.fetch_add(1, Ordering::Relaxed)
     );
     let settings = settings_payload_to_run(&request.settings);
 
     state.store.create_session(&CreateSessionInput {
-        id: session_id.clone(),
+        id: run_id.clone(),
+        thread_id: thread_id.clone(),
         prompt: request.prompt.clone(),
         workspace: workspace.clone(),
         lifecycle: SessionLifecycle::Launching,
@@ -143,13 +155,17 @@ pub fn start_run(
     launch_run(
         app,
         state.inner(),
-        session_id.clone(),
+        thread_id.clone(),
+        run_id.clone(),
         request.prompt,
         workspace,
         settings,
         None,
     )?;
-    Ok(StartRunResponse { session_id })
+    Ok(StartRunResponse {
+        session_id: thread_id,
+        run_id,
+    })
 }
 
 #[tauri::command]
@@ -183,16 +199,17 @@ pub fn retry_run(
 ) -> Result<StartRunResponse, String> {
     let record = state
         .store
-        .get_session(&request.session_id)?
+        .get_thread(&request.session_id)?
         .ok_or_else(|| "session history entry not found".to_string())?;
 
-    let session_id = format!(
+    let run_id = format!(
         "run-{}",
         state.next_session_id.fetch_add(1, Ordering::Relaxed)
     );
     let settings = record.settings.clone();
     state.store.create_session(&CreateSessionInput {
-        id: session_id.clone(),
+        id: run_id.clone(),
+        thread_id: record.id.clone(),
         prompt: record.prompt.clone(),
         workspace: record.workspace.clone(),
         lifecycle: SessionLifecycle::Launching,
@@ -203,13 +220,17 @@ pub fn retry_run(
     launch_run(
         app,
         state.inner(),
-        session_id.clone(),
+        record.id.clone(),
+        run_id.clone(),
         record.prompt,
         record.workspace,
         settings,
         None,
     )?;
-    Ok(StartRunResponse { session_id })
+    Ok(StartRunResponse {
+        session_id: record.id,
+        run_id,
+    })
 }
 
 #[tauri::command]
@@ -228,36 +249,40 @@ pub fn continue_session(
     let settings = settings_payload_to_run(&run.settings);
     let existing = state
         .store
-        .get_session(&request.session_id)?
+        .get_thread(&request.session_id)?
         .ok_or_else(|| "session history entry not found".to_string())?;
-    let resume_codex_session_id = resume_codex_session_id(&existing, &workspace, &settings);
-    let updated = state.store.prepare_session_run(
-        &request.session_id,
-        &SessionRunUpdate {
-            prompt: run.prompt.clone(),
-            workspace: workspace.clone(),
-            codex_session_id: resume_codex_session_id.clone(),
-            lifecycle: SessionLifecycle::Launching,
-            status: "Launching".to_string(),
-            settings: settings.clone(),
-        },
-    )?;
-
-    if !updated {
-        return Err("session history entry not found".to_string());
-    }
+    let latest_run = state
+        .store
+        .get_session(&existing.latest_run_id)?
+        .ok_or_else(|| "latest run entry not found".to_string())?;
+    let resume_codex_session_id = resume_codex_session_id(&latest_run, &workspace, &settings);
+    let run_id = format!(
+        "run-{}",
+        state.next_session_id.fetch_add(1, Ordering::Relaxed)
+    );
+    state.store.create_session(&CreateSessionInput {
+        id: run_id.clone(),
+        thread_id: existing.id.clone(),
+        prompt: run.prompt.clone(),
+        workspace: workspace.clone(),
+        lifecycle: SessionLifecycle::Launching,
+        status: "Launching".to_string(),
+        settings: settings.clone(),
+    })?;
 
     launch_run(
         app,
         state.inner(),
-        request.session_id.clone(),
+        existing.id.clone(),
+        run_id.clone(),
         run.prompt,
         workspace,
         settings,
         resume_codex_session_id,
     )?;
     Ok(StartRunResponse {
-        session_id: request.session_id,
+        session_id: existing.id,
+        run_id,
     })
 }
 
@@ -271,16 +296,17 @@ pub fn delete_session(
     }
 
     Ok(DeleteSessionResponse {
-        deleted: state.store.delete_session(&request.session_id)?,
+        deleted: state.store.delete_thread(&request.session_id)?,
     })
 }
 
 impl EventPayload {
-    pub fn from_event(session_id: String, event: Event, finished: bool) -> Self {
+    pub fn from_event(session_id: String, run_id: String, event: Event, finished: bool) -> Self {
         let lifecycle = crate::runtime::lifecycle_for_event(&event, finished);
 
         Self {
             session_id,
+            run_id,
             timestamp: event.timestamp,
             kind: kind_label(event.kind).to_string(),
             message: event.message,
@@ -292,8 +318,42 @@ impl EventPayload {
 
 impl From<StoredSession> for SessionListItem {
     fn from(value: StoredSession) -> Self {
+        let run_id = value.id.clone();
+        Self {
+            session_id: run_id.clone(),
+            active_run_id: Some(run_id.clone()),
+            latest_run_id: run_id,
+            attempt_count: value.attempt_no as usize,
+            title: value.title,
+            prompt: value.prompt,
+            workspace: crate::app_state::normalize_workspace_display(&value.workspace),
+            codex_session_id: value.codex_session_id,
+            lifecycle: lifecycle_label(value.lifecycle).to_string(),
+            status: value.status,
+            updated_at: value.updated_at.to_string(),
+            last_event_at: value.last_event_at.map(|value| value.to_string()),
+            last_message: value.last_message,
+            total_events: value.total_events,
+            command_count: value.command_count,
+            warning_count: value.warning_count,
+            error_count: value.error_count,
+            settings: SettingsPayload {
+                model: value.settings.model,
+                sandbox: value.settings.sandbox,
+                approval: value.settings.approval,
+                bypass_approvals_and_sandbox: value.settings.bypass_approvals_and_sandbox,
+            },
+        }
+    }
+}
+
+impl From<StoredThread> for SessionListItem {
+    fn from(value: StoredThread) -> Self {
         Self {
             session_id: value.id,
+            active_run_id: value.active_run_id,
+            latest_run_id: value.latest_run_id,
+            attempt_count: value.attempt_count,
             title: value.title,
             prompt: value.prompt,
             workspace: crate::app_state::normalize_workspace_display(&value.workspace),
@@ -362,6 +422,8 @@ mod tests {
     fn session_summary_mapping_preserves_counts() {
         let item = SessionListItem::from(StoredSession {
             id: "run-1".to_string(),
+            thread_id: "thread-1".to_string(),
+            attempt_no: 1,
             title: "Prompt".to_string(),
             prompt: "prompt".to_string(),
             workspace: "c:/repo".to_string(),

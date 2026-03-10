@@ -9,6 +9,7 @@ export type Lifecycle =
 
 export type AgentEvent = {
   session_id: string;
+  run_id: string;
   timestamp: string;
   kind: Kind;
   message: string;
@@ -25,6 +26,9 @@ export type SessionSettings = {
 
 export type SessionListItem = {
   session_id: string;
+  active_run_id?: string | null;
+  latest_run_id: string;
+  attempt_count: number;
   title: string;
   prompt: string;
   workspace: string;
@@ -44,6 +48,7 @@ export type SessionListItem = {
 export type SessionEvent = {
   id?: number;
   session_id?: string;
+  run_id?: string;
   timestamp: string;
   kind: Kind;
   message: string;
@@ -53,6 +58,10 @@ export type SessionEvent = {
 
 export type SessionState = {
   id: string;
+  activeRunId: string | null;
+  latestRunId: string;
+  selectedRunId: string;
+  attemptCount: number;
   title: string;
   prompt: string;
   workspace: string;
@@ -78,6 +87,10 @@ export type SessionFilter = {
 export function createSessionState(record: SessionListItem): SessionState {
   return {
     id: record.session_id,
+    activeRunId: record.active_run_id ?? null,
+    latestRunId: record.latest_run_id,
+    selectedRunId: record.active_run_id ?? record.latest_run_id,
+    attemptCount: record.attempt_count,
     title: record.title,
     prompt: record.prompt,
     workspace: record.workspace,
@@ -100,6 +113,11 @@ export function mergeSessionSummary(session: SessionState, summary: SessionListI
   return {
     ...session,
     title: summary.title,
+    activeRunId: summary.active_run_id ?? null,
+    latestRunId: summary.latest_run_id,
+    selectedRunId:
+      summary.active_run_id ?? (session.selectedRunId === session.latestRunId ? summary.latest_run_id : session.selectedRunId),
+    attemptCount: summary.attempt_count,
     prompt: summary.prompt,
     workspace: summary.workspace,
     codexSessionId: summary.codex_session_id ?? session.codexSessionId,
@@ -128,6 +146,7 @@ export function attachSessionEvents(session: SessionState, events: SessionEvent[
 export function applyAgentEvent(session: SessionState, event: AgentEvent): SessionState {
   const nextEvent: SessionEvent = {
     session_id: event.session_id,
+    run_id: event.run_id,
     timestamp: event.timestamp,
     kind: event.kind,
     message: event.message,
@@ -138,6 +157,9 @@ export function applyAgentEvent(session: SessionState, event: AgentEvent): Sessi
     status: event.finished ? titleFromLifecycle(event.lifecycle) : event.kind === "status" ? event.message : "Running",
     lifecycle: event.lifecycle,
     running: isActiveLifecycle(event.lifecycle) && !event.finished,
+    activeRunId: event.finished ? null : event.run_id,
+    latestRunId: event.run_id,
+    selectedRunId: event.run_id,
     events: session.eventsLoaded ? [...session.events, nextEvent] : session.events,
     totalEvents: session.totalEvents + 1,
     commands: session.commands + (event.kind === "command" ? 1 : 0),

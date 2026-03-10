@@ -35,6 +35,7 @@ type Bootstrap = {
 
 type StartRunResponse = {
   session_id: string;
+  run_id: string;
 };
 
 type DeleteSessionResponse = {
@@ -286,7 +287,7 @@ export function startApp(dom: AppDom) {
     }
 
     dom.detailTitle.textContent = session.title;
-    dom.detailSubtitle.textContent = `${session.id} · updated ${formatUpdatedAt(session.updatedAt) || session.updatedAt}`;
+    dom.detailSubtitle.textContent = `${session.id} · ${session.attemptCount} run${session.attemptCount === 1 ? "" : "s"} · updated ${formatUpdatedAt(session.updatedAt) || session.updatedAt}`;
     dom.detailStatus.textContent = session.status;
     dom.detailEvents.textContent = String(session.totalEvents);
     dom.detailCommands.textContent = String(session.commands);
@@ -463,8 +464,6 @@ export function startApp(dom: AppDom) {
         if (existing.running) {
           throw new Error("session is already running");
         }
-        const nextCodexSessionId =
-          existing.workspace === currentWorkspace ? existing.codexSessionId : null;
 
         setComposerMessage(`Continuing ${existing.id}...`);
         const response = await api.invoke<StartRunResponse>("continue_session", {
@@ -475,29 +474,17 @@ export function startApp(dom: AppDom) {
             settings,
           },
         });
-
-        upsertSession({
-          session_id: response.session_id,
-          title: existing.title,
-          prompt: trimmedPrompt,
-          workspace: currentWorkspace,
-          codex_session_id: nextCodexSessionId,
-          lifecycle: "launching",
-          status: "Launching",
-          updated_at: String(Date.now()),
-          last_event_at: existing.updatedAt,
-          last_message: "waiting for first event",
-          total_events: existing.totalEvents,
-          command_count: existing.commands,
-          warning_count: existing.warnings,
-          error_count: 0,
-          settings,
+        const summary = await api.invoke<SessionListItem | null>("get_session", {
+          request: { session_id: response.session_id },
         });
+        if (summary) {
+          upsertSession(summary);
+        }
 
         selectedSessionId = response.session_id;
         draftingNewSession = false;
         renderAll();
-        setComposerMessage(`Continued ${response.session_id}.`);
+        setComposerMessage(`Continued ${response.session_id} with ${response.run_id}.`);
         return;
       }
 
@@ -509,29 +496,17 @@ export function startApp(dom: AppDom) {
           settings,
         },
       });
-
-      upsertSession({
-        session_id: response.session_id,
-        title: promptTitle(trimmedPrompt),
-        prompt: trimmedPrompt,
-        workspace: currentWorkspace,
-        codex_session_id: null,
-        lifecycle: "launching",
-        status: "Launching",
-        updated_at: String(Date.now()),
-        last_event_at: null,
-        last_message: "waiting for first event",
-        total_events: 0,
-        command_count: 0,
-        warning_count: 0,
-        error_count: 0,
-        settings,
+      const summary = await api.invoke<SessionListItem | null>("get_session", {
+        request: { session_id: response.session_id },
       });
+      if (summary) {
+        upsertSession(summary);
+      }
 
       selectedSessionId = response.session_id;
       draftingNewSession = false;
       renderAll();
-      setComposerMessage(`Started ${response.session_id}.`);
+      setComposerMessage(`Started ${response.session_id} with ${response.run_id}.`);
     }, "Unable to start run.");
 
     setLoadingState(false);
@@ -669,7 +644,15 @@ export function startApp(dom: AppDom) {
       const response = await tauriApi.invoke<StartRunResponse>("retry_run", {
         request: { session_id: sessionId },
       });
-      setComposerMessage(`Retried ${sessionId} as ${response.session_id}.`);
+      const summary = await tauriApi.invoke<SessionListItem | null>("get_session", {
+        request: { session_id: response.session_id },
+      });
+      if (summary) {
+        upsertSession(summary);
+      }
+      selectedSessionId = response.session_id;
+      renderAll();
+      setComposerMessage(`Retried ${sessionId} with ${response.run_id}.`);
     }, "Unable to retry run.");
   });
 

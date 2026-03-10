@@ -16,6 +16,9 @@ import {
 function summary(overrides: Partial<SessionListItem> = {}): SessionListItem {
   return {
     session_id: "run-1",
+    active_run_id: "run-1-a1",
+    latest_run_id: "run-1-a1",
+    attempt_count: 1,
     title: "Fix tests",
     prompt: "Fix the failing tests",
     workspace: "c:/repo",
@@ -39,6 +42,7 @@ describe("session state", () => {
 
     const next = applyAgentEvent(session, {
       session_id: "run-1",
+      run_id: "run-1-a2",
       timestamp: "command",
       kind: "command",
       message: "completed",

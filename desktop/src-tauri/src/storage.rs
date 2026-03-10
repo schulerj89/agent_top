@@ -10,6 +10,8 @@ use serde::{Deserialize, Serialize};
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct StoredSession {
     pub id: String,
+    pub thread_id: String,
+    pub attempt_no: i64,
     pub title: String,
     pub prompt: String,
     pub workspace: String,
@@ -42,6 +44,7 @@ pub struct StoredEvent {
 #[derive(Clone, Debug)]
 pub struct CreateSessionInput {
     pub id: String,
+    pub thread_id: String,
     pub prompt: String,
     pub workspace: String,
     pub lifecycle: SessionLifecycle,
@@ -63,6 +66,29 @@ pub struct SessionRunUpdate {
     pub codex_session_id: Option<String>,
     pub lifecycle: SessionLifecycle,
     pub status: String,
+    pub settings: RunSettings,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct StoredThread {
+    pub id: String,
+    pub title: String,
+    pub prompt: String,
+    pub workspace: String,
+    pub latest_run_id: String,
+    pub active_run_id: Option<String>,
+    pub attempt_count: usize,
+    pub codex_session_id: Option<String>,
+    pub lifecycle: SessionLifecycle,
+    pub status: String,
+    pub created_at: i64,
+    pub updated_at: i64,
+    pub last_event_at: Option<i64>,
+    pub last_message: Option<String>,
+    pub total_events: usize,
+    pub command_count: usize,
+    pub warning_count: usize,
+    pub error_count: usize,
     pub settings: RunSettings,
 }
 
@@ -91,8 +117,16 @@ impl SessionStore {
                 r#"
                 pragma foreign_keys = on;
 
+                create table if not exists threads (
+                    id text primary key,
+                    title text not null,
+                    created_at integer not null
+                );
+
                 create table if not exists sessions (
                     id text primary key,
+                    thread_id text not null,
+                    attempt_no integer not null default 1,
                     title text not null,
                     prompt text not null,
                     workspace text not null,
@@ -126,6 +160,9 @@ impl SessionStore {
 
                 create index if not exists idx_sessions_updated_at
                     on sessions(updated_at desc);
+
+                create index if not exists idx_sessions_thread_attempt
+                    on sessions(thread_id, attempt_no desc);
 
                 create index if not exists idx_events_session_sequence
                     on events(session_id, sequence_no);
@@ -178,25 +215,74 @@ impl SessionStore {
                 .map_err(|error| error.to_string())?;
         }
 
-        Ok(())
-    }
+        if !session_columns.iter().any(|name| name == "thread_id") {
+            connection
+                .execute(
+                    "alter table sessions add column thread_id text not null default ''",
+                    [],
+                )
+                .map_err(|error| error.to_string())?;
+        }
 
-    pub fn create_session(&self, input: &CreateSessionInput) -> Result<StoredSession, String> {
-        let connection = self.open()?;
-        let now = now_ms();
-        let title = derive_title(&input.prompt);
+        if !session_columns.iter().any(|name| name == "attempt_no") {
+            connection
+                .execute(
+                    "alter table sessions add column attempt_no integer not null default 1",
+                    [],
+                )
+                .map_err(|error| error.to_string())?;
+        }
 
         connection
             .execute(
                 r#"
+                insert or ignore into threads (id, title, created_at)
+                select id, title, created_at from sessions
+                "#,
+                [],
+            )
+            .map_err(|error| error.to_string())?;
+        connection
+            .execute(
+                "update sessions set thread_id = id where trim(thread_id) = ''",
+                [],
+            )
+            .map_err(|error| error.to_string())?;
+
+        Ok(())
+    }
+
+    pub fn create_session(&self, input: &CreateSessionInput) -> Result<StoredSession, String> {
+        let mut connection = self.open()?;
+        let now = now_ms();
+        let title = derive_title(&input.prompt);
+        let tx = connection.transaction().map_err(|error| error.to_string())?;
+        let attempt_no: i64 = tx
+            .query_row(
+                "select coalesce(max(attempt_no), 0) + 1 from sessions where thread_id = ?1",
+                [input.thread_id.as_str()],
+                |row| row.get(0),
+            )
+            .map_err(|error| error.to_string())?;
+
+        tx.execute(
+            "insert or ignore into threads (id, title, created_at) values (?1, ?2, ?3)",
+            params![input.thread_id, title, now],
+        )
+        .map_err(|error| error.to_string())?;
+
+        tx.execute(
+                r#"
                 insert into sessions (
-                    id, title, prompt, workspace, lifecycle, status, created_at, updated_at,
+                    id, thread_id, attempt_no, title, prompt, workspace, lifecycle, status, created_at, updated_at,
                     codex_session_id, resume_ready, last_event_at, last_message, total_events, command_count, warning_count,
                     error_count, model, sandbox, approval, bypass_approvals_and_sandbox
-                ) values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?7, null, 0, null, null, 0, 0, 0, 0, ?8, ?9, ?10, ?11)
+                ) values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?9, null, 0, null, null, 0, 0, 0, 0, ?10, ?11, ?12, ?13)
                 "#,
                 params![
                     input.id,
+                    input.thread_id,
+                    attempt_no,
                     title,
                     input.prompt,
                     input.workspace,
@@ -214,6 +300,7 @@ impl SessionStore {
                 ],
             )
             .map_err(|error| error.to_string())?;
+        tx.commit().map_err(|error| error.to_string())?;
 
         self.get_session(&input.id)?
             .ok_or_else(|| "session insert succeeded but row was not found".to_string())
@@ -365,6 +452,64 @@ impl SessionStore {
         Ok(updated > 0)
     }
 
+    pub fn list_threads(&self, limit: Option<usize>) -> Result<Vec<StoredThread>, String> {
+        let connection = self.open()?;
+        let mut sql = thread_summary_query("");
+        if limit.is_some() {
+            sql.push_str(" limit ?1");
+        }
+
+        let mut statement = connection.prepare(&sql).map_err(|error| error.to_string())?;
+        let rows = match limit {
+            Some(value) => statement
+                .query_map([value as i64], read_thread)
+                .map_err(|error| error.to_string())?,
+            None => statement
+                .query_map([], read_thread)
+                .map_err(|error| error.to_string())?,
+        };
+
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(|error| error.to_string())
+    }
+
+    pub fn get_thread(&self, thread_id: &str) -> Result<Option<StoredThread>, String> {
+        let connection = self.open()?;
+        let sql = thread_summary_query("where t.id = ?1");
+        connection
+            .query_row(&sql, [thread_id], read_thread)
+            .optional()
+            .map_err(|error| error.to_string())
+    }
+
+    pub fn selected_run_id_for_thread(&self, thread_id: &str) -> Result<Option<String>, String> {
+        let connection = self.open()?;
+        connection
+            .query_row(
+                r#"
+                select coalesce(
+                    (
+                        select id from sessions
+                        where thread_id = ?1
+                          and lifecycle in ('launching', 'running', 'cancelling')
+                        order by updated_at desc, attempt_no desc
+                        limit 1
+                    ),
+                    (
+                        select id from sessions
+                        where thread_id = ?1
+                        order by attempt_no desc
+                        limit 1
+                    )
+                )
+                "#,
+                [thread_id],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|error| error.to_string())
+    }
+
     pub fn list_sessions(&self, limit: Option<usize>) -> Result<Vec<StoredSession>, String> {
         let connection = self.open()?;
         let sql = match limit {
@@ -441,6 +586,23 @@ impl SessionStore {
         Ok(deleted > 0)
     }
 
+    pub fn delete_thread(&self, thread_id: &str) -> Result<bool, String> {
+        let mut connection = self.open()?;
+        let tx = connection.transaction().map_err(|error| error.to_string())?;
+        tx.execute(
+            "delete from events where session_id in (select id from sessions where thread_id = ?1)",
+            [thread_id],
+        )
+        .map_err(|error| error.to_string())?;
+        tx.execute("delete from sessions where thread_id = ?1", [thread_id])
+            .map_err(|error| error.to_string())?;
+        let deleted = tx
+            .execute("delete from threads where id = ?1", [thread_id])
+            .map_err(|error| error.to_string())?;
+        tx.commit().map_err(|error| error.to_string())?;
+        Ok(deleted > 0)
+    }
+
     pub fn set_codex_session_id(&self, session_id: &str, codex_session_id: &str) -> Result<(), String> {
         self.open()?
             .execute(
@@ -484,6 +646,8 @@ pub fn default_db_path() -> PathBuf {
 fn read_session(row: &rusqlite::Row<'_>) -> rusqlite::Result<StoredSession> {
     Ok(StoredSession {
         id: row.get("id")?,
+        thread_id: row.get("thread_id")?,
+        attempt_no: row.get("attempt_no")?,
         title: row.get("title")?,
         prompt: row.get("prompt")?,
         workspace: row.get("workspace")?,
@@ -508,6 +672,104 @@ fn read_session(row: &rusqlite::Row<'_>) -> rusqlite::Result<StoredSession> {
                 != 0,
         },
     })
+}
+
+fn read_thread(row: &rusqlite::Row<'_>) -> rusqlite::Result<StoredThread> {
+    Ok(StoredThread {
+        id: row.get("thread_id")?,
+        title: row.get("title")?,
+        prompt: row.get("prompt")?,
+        workspace: row.get("workspace")?,
+        latest_run_id: row.get("latest_run_id")?,
+        active_run_id: row.get("active_run_id")?,
+        attempt_count: row.get("attempt_count")?,
+        codex_session_id: row.get("codex_session_id")?,
+        lifecycle: lifecycle_from_str(&row.get::<_, String>("lifecycle")?)?,
+        status: row.get("status")?,
+        created_at: row.get("created_at")?,
+        updated_at: row.get("updated_at")?,
+        last_event_at: row.get("last_event_at")?,
+        last_message: row.get("last_message")?,
+        total_events: row.get("total_events")?,
+        command_count: row.get("command_count")?,
+        warning_count: row.get("warning_count")?,
+        error_count: row.get("error_count")?,
+        settings: RunSettings {
+            model: row.get("model")?,
+            sandbox: row.get("sandbox")?,
+            approval: row.get("approval")?,
+            bypass_approvals_and_sandbox: row
+                .get::<_, i64>("bypass_approvals_and_sandbox")?
+                != 0,
+        },
+    })
+}
+
+fn thread_summary_query(where_clause: &str) -> String {
+    format!(
+        r#"
+        select
+            t.id as thread_id,
+            t.title as title,
+            latest.id as latest_run_id,
+            latest.prompt as prompt,
+            latest.workspace as workspace,
+            latest.codex_session_id as codex_session_id,
+            latest.lifecycle as lifecycle,
+            latest.status as status,
+            t.created_at as created_at,
+            latest.updated_at as updated_at,
+            latest.last_event_at as last_event_at,
+            latest.last_message as last_message,
+            (
+                select coalesce(sum(total_events), 0)
+                from sessions counts
+                where counts.thread_id = t.id
+            ) as total_events,
+            (
+                select coalesce(sum(command_count), 0)
+                from sessions counts
+                where counts.thread_id = t.id
+            ) as command_count,
+            (
+                select coalesce(sum(warning_count), 0)
+                from sessions counts
+                where counts.thread_id = t.id
+            ) as warning_count,
+            (
+                select coalesce(sum(error_count), 0)
+                from sessions counts
+                where counts.thread_id = t.id
+            ) as error_count,
+            (
+                select count(*)
+                from sessions counts
+                where counts.thread_id = t.id
+            ) as attempt_count,
+            (
+                select active.id
+                from sessions active
+                where active.thread_id = t.id
+                  and active.lifecycle in ('launching', 'running', 'cancelling')
+                order by active.updated_at desc, active.attempt_no desc
+                limit 1
+            ) as active_run_id,
+            latest.model as model,
+            latest.sandbox as sandbox,
+            latest.approval as approval,
+            latest.bypass_approvals_and_sandbox as bypass_approvals_and_sandbox
+        from threads t
+        join sessions latest
+            on latest.thread_id = t.id
+           and latest.attempt_no = (
+                select max(candidate.attempt_no)
+                from sessions candidate
+                where candidate.thread_id = t.id
+           )
+        {where_clause}
+        order by latest.updated_at desc, t.created_at desc
+        "#
+    )
 }
 
 fn read_event(row: &rusqlite::Row<'_>) -> rusqlite::Result<StoredEvent> {
@@ -611,6 +873,7 @@ mod tests {
         let first = store
             .create_session(&CreateSessionInput {
                 id: "run-1".to_string(),
+                thread_id: "thread-1".to_string(),
                 prompt: "first prompt".to_string(),
                 workspace: "c:/repo".to_string(),
                 lifecycle: SessionLifecycle::Launching,
@@ -621,6 +884,7 @@ mod tests {
         let second = store
             .create_session(&CreateSessionInput {
                 id: "run-2".to_string(),
+                thread_id: "thread-2".to_string(),
                 prompt: "second prompt".to_string(),
                 workspace: "c:/repo".to_string(),
                 lifecycle: SessionLifecycle::Running,
@@ -652,6 +916,7 @@ mod tests {
         store
             .create_session(&CreateSessionInput {
                 id: "run-1".to_string(),
+                thread_id: "thread-1".to_string(),
                 prompt: "prompt".to_string(),
                 workspace: "c:/repo".to_string(),
                 lifecycle: SessionLifecycle::Running,
@@ -697,6 +962,7 @@ mod tests {
         store
             .create_session(&CreateSessionInput {
                 id: "run-1".to_string(),
+                thread_id: "thread-1".to_string(),
                 prompt: "prompt".to_string(),
                 workspace: "c:/repo".to_string(),
                 lifecycle: SessionLifecycle::Launching,
@@ -739,6 +1005,7 @@ mod tests {
         store
             .create_session(&CreateSessionInput {
                 id: "run-1".to_string(),
+                thread_id: "thread-1".to_string(),
                 prompt: "prompt".to_string(),
                 workspace: "c:/repo".to_string(),
                 lifecycle: SessionLifecycle::Running,
@@ -763,6 +1030,7 @@ mod tests {
         store
             .create_session(&CreateSessionInput {
                 id: "run-1".to_string(),
+                thread_id: "thread-1".to_string(),
                 prompt: "first prompt".to_string(),
                 workspace: "c:/repo-a".to_string(),
                 lifecycle: SessionLifecycle::Completed,
@@ -814,6 +1082,7 @@ mod tests {
         store
             .create_session(&CreateSessionInput {
                 id: "run-1".to_string(),
+                thread_id: "thread-1".to_string(),
                 prompt: "prompt".to_string(),
                 workspace: "c:/repo".to_string(),
                 lifecycle: SessionLifecycle::Launching,
@@ -844,6 +1113,7 @@ mod tests {
         store
             .create_session(&CreateSessionInput {
                 id: "run-1".to_string(),
+                thread_id: "thread-1".to_string(),
                 prompt: "prompt".to_string(),
                 workspace: "c:/repo".to_string(),
                 lifecycle: SessionLifecycle::Completed,

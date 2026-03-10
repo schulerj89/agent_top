@@ -13,6 +13,7 @@ pub struct AppState {
     pub default_workspace: String,
     pub store: SessionStore,
     pub next_session_id: AtomicU64,
+    pub next_thread_id: AtomicU64,
     pub active_runs: Mutex<HashMap<String, RunController>>,
 }
 
@@ -62,6 +63,7 @@ pub struct SessionLookupRequest {
 #[derive(Serialize)]
 pub struct StartRunResponse {
     pub session_id: String,
+    pub run_id: String,
 }
 
 impl Default for SettingsPayload {

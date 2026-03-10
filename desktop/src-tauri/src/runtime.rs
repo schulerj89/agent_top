@@ -9,7 +9,7 @@ use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::app_state::{normalize_workspace_display, AppState, RunRequestPayload};
 use crate::commands::EventPayload;
-use crate::storage::{SessionStore, SessionUpdate, StoredSession};
+use crate::storage::{SessionStore, SessionUpdate, StoredSession, StoredThread};
 
 pub fn validate_request(request: &RunRequestPayload) -> Result<(), String> {
     if request.prompt.trim().is_empty() {
@@ -46,31 +46,41 @@ pub fn register_run(
 pub fn launch_run(
     app: AppHandle,
     state: &AppState,
-    session_id: String,
+    thread_id: String,
+    run_id: String,
     prompt: String,
     workspace: String,
     settings: RunSettings,
     codex_session_id: Option<String>,
 ) -> Result<(), String> {
     let managed = start_codex_run(RunRequest {
-        session_id: session_id.clone(),
+        session_id: run_id.clone(),
         prompt,
         workspace,
         settings,
         codex_session_id,
     });
 
-    register_run(state, &session_id, managed.controller.clone())?;
-    forward_events(app, state.store.clone(), session_id, managed);
+    register_run(state, &run_id, managed.controller.clone())?;
+    forward_events(app, state.store.clone(), thread_id, run_id, managed);
     Ok(())
 }
 
-pub fn has_active_run(state: &AppState, session_id: &str) -> Result<bool, String> {
+pub fn has_active_run(state: &AppState, thread_id: &str) -> Result<bool, String> {
+    let Some(active_run_id) = state.store.selected_run_id_for_thread(thread_id)? else {
+        return Ok(false);
+    };
+    let Some(thread) = state.store.get_thread(thread_id)? else {
+        return Ok(false);
+    };
+    if thread.active_run_id.as_deref() != Some(active_run_id.as_str()) {
+        return Ok(false);
+    }
     let guard = state
         .active_runs
         .lock()
         .map_err(|_| "active run state is unavailable".to_string())?;
-    Ok(guard.contains_key(session_id))
+    Ok(guard.contains_key(&active_run_id) || thread.active_run_id.is_some())
 }
 
 pub fn next_session_seed(store: &SessionStore) -> Result<u64, String> {
@@ -81,6 +91,22 @@ pub fn next_session_seed(store: &SessionStore) -> Result<u64, String> {
             session
                 .id
                 .strip_prefix("run-")
+                .and_then(|value| value.parse::<u64>().ok())
+        })
+        .max()
+        .unwrap_or(0);
+
+    Ok(highest + 1)
+}
+
+pub fn next_thread_seed(store: &SessionStore) -> Result<u64, String> {
+    let highest = store
+        .list_threads(None)?
+        .into_iter()
+        .filter_map(|thread| {
+            thread
+                .id
+                .strip_prefix("thread-")
                 .and_then(|value| value.parse::<u64>().ok())
         })
         .max()
@@ -121,23 +147,27 @@ pub fn reconcile_orphaned_sessions(store: &SessionStore) -> Result<(), String> {
 
 pub fn reconcile_cancelled_orphaned_session(
     store: &SessionStore,
-    session_id: &str,
-) -> Result<Option<StoredSession>, String> {
-    let Some(session) = store.get_session(session_id)? else {
+    thread_id: &str,
+) -> Result<Option<StoredThread>, String> {
+    let Some(thread) = store.get_thread(thread_id)? else {
         return Err("session history entry not found".to_string());
     };
 
-    match session.lifecycle {
+    match thread.lifecycle {
         SessionLifecycle::Launching | SessionLifecycle::Running | SessionLifecycle::Cancelling => {
+            let target_run_id = thread
+                .active_run_id
+                .clone()
+                .unwrap_or_else(|| thread.latest_run_id.clone());
             store.update_session(
-                session_id,
+                &target_run_id,
                 &SessionUpdate {
                     lifecycle: SessionLifecycle::Cancelled,
                     status: "Cancelled".to_string(),
                     last_message: Some("session cancelled after losing the active process".to_string()),
                 },
             )?;
-            store.get_session(session_id)
+            store.get_thread(thread_id)
         }
         SessionLifecycle::Cancelled | SessionLifecycle::Completed | SessionLifecycle::Failed => {
             Err("session is not running".to_string())
@@ -145,20 +175,26 @@ pub fn reconcile_cancelled_orphaned_session(
     }
 }
 
-pub fn forward_events(app: AppHandle, store: SessionStore, session_id: String, managed: ManagedRun) {
+pub fn forward_events(
+    app: AppHandle,
+    store: SessionStore,
+    thread_id: String,
+    run_id: String,
+    managed: ManagedRun,
+) {
     std::thread::spawn(move || {
         while let Ok(update) = managed.receiver.recv() {
             let event = update.event.clone();
-            let _ = persist_runner_update(&store, &session_id, &event, update.finished);
+            let _ = persist_runner_update(&store, &run_id, &event, update.finished);
             let _ = app.emit(
                 "agent-event",
-                EventPayload::from_event(session_id.clone(), event, update.finished),
+                EventPayload::from_event(thread_id.clone(), run_id.clone(), event, update.finished),
             );
 
             if update.finished {
                 let state: State<'_, AppState> = app.state();
                 if let Ok(mut guard) = state.active_runs.lock() {
-                    guard.remove(&session_id);
+                    guard.remove(&run_id);
                 }
                 break;
             }
@@ -262,11 +298,13 @@ pub fn startup_state() -> Result<AppState, io::Error> {
     store.init().map_err(io::Error::other)?;
     reconcile_orphaned_sessions(&store).map_err(io::Error::other)?;
     let next_session_id = next_session_seed(&store).map_err(io::Error::other)?;
+    let next_thread_id = next_thread_seed(&store).map_err(io::Error::other)?;
 
     Ok(AppState {
         default_workspace: crate::app_state::detect_workspace(),
         store,
         next_session_id: std::sync::atomic::AtomicU64::new(next_session_id),
+        next_thread_id: std::sync::atomic::AtomicU64::new(next_thread_id),
         active_runs: std::sync::Mutex::new(std::collections::HashMap::new()),
     })
 }
@@ -317,6 +355,7 @@ mod tests {
         store
             .create_session(&CreateSessionInput {
                 id: "run-1".to_string(),
+                thread_id: "thread-1".to_string(),
                 prompt: "prompt".to_string(),
                 workspace: "c:/repo".to_string(),
                 lifecycle: SessionLifecycle::Launching,
@@ -376,6 +415,7 @@ mod tests {
         store
             .create_session(&CreateSessionInput {
                 id: "run-2".to_string(),
+                thread_id: "thread-2".to_string(),
                 prompt: "prompt".to_string(),
                 workspace: "c:/repo".to_string(),
                 lifecycle: SessionLifecycle::Completed,
@@ -386,6 +426,7 @@ mod tests {
         store
             .create_session(&CreateSessionInput {
                 id: "run-8".to_string(),
+                thread_id: "thread-8".to_string(),
                 prompt: "prompt".to_string(),
                 workspace: "c:/repo".to_string(),
                 lifecycle: SessionLifecycle::Completed,
@@ -396,6 +437,7 @@ mod tests {
         store
             .create_session(&CreateSessionInput {
                 id: "imported-session".to_string(),
+                thread_id: "imported-session".to_string(),
                 prompt: "prompt".to_string(),
                 workspace: "c:/repo".to_string(),
                 lifecycle: SessionLifecycle::Completed,
@@ -414,6 +456,7 @@ mod tests {
         store
             .create_session(&CreateSessionInput {
                 id: "run-1".to_string(),
+                thread_id: "thread-1".to_string(),
                 prompt: "prompt".to_string(),
                 workspace: "c:/repo".to_string(),
                 lifecycle: SessionLifecycle::Running,
@@ -424,6 +467,7 @@ mod tests {
         store
             .create_session(&CreateSessionInput {
                 id: "run-2".to_string(),
+                thread_id: "thread-2".to_string(),
                 prompt: "prompt".to_string(),
                 workspace: "c:/repo".to_string(),
                 lifecycle: SessionLifecycle::Cancelling,
@@ -455,6 +499,7 @@ mod tests {
         store
             .create_session(&CreateSessionInput {
                 id: "run-1".to_string(),
+                thread_id: "thread-1".to_string(),
                 prompt: "prompt".to_string(),
                 workspace: "c:/repo".to_string(),
                 lifecycle: SessionLifecycle::Running,
@@ -463,7 +508,7 @@ mod tests {
             })
             .expect("create running session");
 
-        let repaired = reconcile_cancelled_orphaned_session(&store, "run-1")
+        let repaired = reconcile_cancelled_orphaned_session(&store, "thread-1")
             .expect("reconcile cancelled session")
             .expect("session exists");
 
@@ -479,6 +524,8 @@ mod tests {
     fn reuses_codex_session_only_when_workspace_matches() {
         let session = StoredSession {
             id: "run-1".to_string(),
+            thread_id: "thread-1".to_string(),
+            attempt_no: 1,
             title: "Prompt".to_string(),
             prompt: "prompt".to_string(),
             workspace: r"\\?\C:\Users\joshs\Projects\repo-a".to_string(),
@@ -520,6 +567,8 @@ mod tests {
     fn does_not_resume_codex_session_for_first_run_state() {
         let session = StoredSession {
             id: "run-1".to_string(),
+            thread_id: "thread-1".to_string(),
+            attempt_no: 1,
             title: "Prompt".to_string(),
             prompt: "prompt".to_string(),
             workspace: r"C:\Users\joshs\Projects\repo-a".to_string(),
@@ -552,6 +601,8 @@ mod tests {
     fn does_not_resume_when_settings_change() {
         let session = StoredSession {
             id: "run-1".to_string(),
+            thread_id: "thread-1".to_string(),
+            attempt_no: 2,
             title: "Prompt".to_string(),
             prompt: "prompt".to_string(),
             workspace: r"C:\Users\joshs\Projects\repo-a".to_string(),
