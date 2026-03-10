@@ -1,40 +1,57 @@
 # agent_top
 
-`agent_top` is a Rust-based Codex session monitor with:
+`agent_top` is a Codex runner and monitor built around a shared Rust core.
 
-- a shared runner core in Rust
-- a terminal UI for local monitoring
-- a Tauri desktop shell for persistent multi-session workflows
+It currently ships two interfaces:
 
-## Current Features
+- a Rust terminal UI for local monitoring and replay
+- a Tauri desktop app for persistent thread-based workflows
 
-- Run `codex exec --json` and stream live events
-- Parse Codex JSONL into normalized session events
-- Monitor sessions in a Rust TUI
-- Launch desktop runs with prompt, workspace, and Codex settings
-- Persist desktop session metadata and event history in SQLite
-- Run multiple desktop sessions in parallel
-- Browse desktop sessions from a left-side session nav
-- Load one selected session into a dedicated detail pane
-- Cancel and retry desktop runs
-- Pick a workspace from a folder dialog in the desktop app
-- Filter session lists and selected-session events
+## What It Does
 
-## Project Layout
+`agent_top` wraps `codex exec --json`, parses the event stream, and presents it in a UI that can:
 
-- [crates/agent_top_core](/C:/Users/joshs/Projects/agent_top/crates/agent_top_core)  
-  Shared Rust core for event parsing, session summaries, and Codex process spawning.
+- start new Codex runs
+- continue an existing thread with a new run attempt
+- retry a thread by launching another run attempt
+- persist thread metadata and event history in SQLite
+- replay saved event logs in the terminal UI
 
-- [src/main.rs](/C:/Users/joshs/Projects/agent_top/src/main.rs)  
-  Terminal app built on `ratatui` and `crossterm`.
+## Architecture
 
-- [desktop](/C:/Users/joshs/Projects/agent_top/desktop)  
-  Tauri desktop app with a TypeScript frontend and Rust backend bridge.
+### Shared Core
 
-- [desktop/src-tauri/src/storage.rs](/C:/Users/joshs/Projects/agent_top/desktop/src-tauri/src/storage.rs)  
-  SQLite-backed storage layer for desktop sessions and event history.
+`crates/agent_top_core` contains the common runtime logic:
 
-## Terminal App
+- spawning Codex processes
+- parsing JSON events into normalized internal events
+- tracking summaries, file touches, and command activity
+- cancellation support
+- resume eligibility checks
+
+### Terminal UI
+
+`src/main.rs` provides a `ratatui`/`crossterm` interface for:
+
+- starting runs
+- watching live status and event streams
+- replaying saved logs
+
+### Desktop App
+
+`desktop` contains the Tauri app:
+
+- `desktop/src` is the TypeScript frontend
+- `desktop/src-tauri/src` is the Rust backend
+- `desktop/src-tauri/src/storage.rs` manages SQLite persistence
+
+The desktop app now uses a thread/run-attempt model:
+
+- a thread represents the long-lived conversation or workspace context
+- each launch, continue, or retry creates a new run attempt inside that thread
+- the UI shows threads in the left rail and resolves the selected timeline from the active or latest run attempt
+
+## Terminal Usage
 
 Run the TUI:
 
@@ -42,11 +59,13 @@ Run the TUI:
 cargo run --
 ```
 
-Useful commands:
+Replay a saved log:
 
 ```powershell
 cargo run -- replay sample\session.log
 ```
+
+Start a run directly:
 
 ```powershell
 cargo run -- run "Reply with the single word ready"
@@ -58,9 +77,9 @@ Inside the TUI:
 - `s` opens settings
 - `q` quits from the home screen
 
-## Desktop App
+## Desktop Usage
 
-Run the desktop shell:
+Start the desktop app in development:
 
 ```powershell
 cd desktop
@@ -68,30 +87,30 @@ npm install
 npm run tauri dev
 ```
 
-Desktop workflow:
+Typical workflow:
 
-- choose a workspace folder
-- enter a prompt or use `/status`
-- launch multiple runs in parallel
-- browse sessions from the left nav
-- inspect the selected session in the detail pane
-- filter selected-session events
-- cancel or retry from the detail view
+1. Choose a workspace folder.
+2. Enter a prompt.
+3. Pick Codex settings such as model, sandbox, and approval mode.
+4. Start a run, continue a thread, or retry a thread.
+5. Inspect thread history and the latest run activity in the main pane.
 
-Desktop persistence:
+Notes:
 
-- session metadata and events are stored in a local SQLite database
-- the desktop app restores recent sessions on startup
+- the selected workspace is shown as the current workspace for the next run
+- the thread also keeps its historical workspace so you can tell current selection from prior context
+- recent threads and run history are restored from SQLite on startup
 
 ## Codex Settings
 
-Current run settings exposed in both app flows:
+The current desktop and terminal flows expose:
 
 - `model`
 - `sandbox`
 - `approval`
+- bypass behavior where supported by the desktop flow
 
-## Event Format
+## Event Replay Format
 
 Replay mode accepts plain-text logs in this format:
 
@@ -110,17 +129,24 @@ Supported kinds:
 
 Sample log:
 
-- [sample/session.log](/C:/Users/joshs/Projects/agent_top/sample/session.log)
+- `sample/session.log`
 
-## Build Checks
+## Build And Test
 
-Root workspace:
+Run the Rust workspace tests:
 
 ```powershell
 cargo test --workspace
 ```
 
-Desktop frontend:
+Check the desktop Rust backend:
+
+```powershell
+cd desktop
+cargo check --manifest-path src-tauri\Cargo.toml
+```
+
+Run the desktop frontend checks:
 
 ```powershell
 cd desktop
@@ -129,16 +155,18 @@ npm test
 npm run build
 ```
 
-Desktop Rust backend:
+Build desktop release artifacts:
 
 ```powershell
 cd desktop
-cargo check --manifest-path src-tauri\Cargo.toml
+npm run tauri build
 ```
 
-## Next Steps
+## Current Focus
 
-- add richer selected-session analytics in the detail pane
-- improve session-to-session keyboard navigation and bulk session actions
-- clean up the remaining JSON-history compatibility paths
-- expand automated coverage around desktop integration flows
+The current desktop work is aimed at:
+
+- improving the thread-oriented UX
+- making run-attempt history clearer inside each thread
+- strengthening typed lifecycle/state handling across the backend and frontend
+- expanding tests around thread continuation and retry flows
