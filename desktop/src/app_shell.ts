@@ -90,21 +90,23 @@ export const APP_SHELL = `
             <p id="detailLatest" class="detail-latest"></p>
           </div>
 
-          <div class="session-filters">
-            <input id="eventSearchInput" type="text" placeholder="Search events in the selected session" />
-            <select id="kindFilter">
-              <option value="all">All kinds</option>
-              <option value="status">Status</option>
-              <option value="command">Command</option>
-              <option value="file">File</option>
-              <option value="warning">Warning</option>
-              <option value="error">Error</option>
-              <option value="note">Note</option>
-            </select>
-          </div>
+          <div class="detail-scroll-shell">
+            <div class="session-filters">
+              <input id="eventSearchInput" type="text" placeholder="Search events in the selected session" />
+              <select id="kindFilter">
+                <option value="all">All kinds</option>
+                <option value="status">Status</option>
+                <option value="command">Command</option>
+                <option value="file">File</option>
+                <option value="warning">Warning</option>
+                <option value="error">Error</option>
+                <option value="note">Note</option>
+              </select>
+            </div>
 
-          <p id="detailMessage" class="run-message">Thread details load on demand.</p>
-          <ul id="detailEventsList" class="detail-events"></ul>
+            <p id="detailMessage" class="run-message">Thread details load on demand.</p>
+            <ul id="detailEventsList" class="detail-events"></ul>
+          </div>
         </section>
 
         <section class="panel composer-panel">

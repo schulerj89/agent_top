@@ -78,6 +78,8 @@ select:disabled {
   grid-template-rows: auto auto minmax(0, 1fr);
   gap: 18px;
   padding: 20px 20px 24px;
+  min-height: 0;
+  overflow: hidden;
 }
 
 .rail-brand,
@@ -383,6 +385,7 @@ strong {
   grid-template-rows: minmax(0, 1fr) auto;
   gap: 18px;
   min-height: 0;
+  overflow: hidden;
 }
 
 .error-banner {
@@ -399,8 +402,9 @@ strong {
 
 .detail-panel {
   display: grid;
-  grid-template-rows: auto auto auto auto auto minmax(0, 1fr);
+  grid-template-rows: auto auto auto minmax(0, 1fr);
   min-height: 0;
+  overflow: hidden;
 }
 
 .detail-header,
@@ -466,7 +470,15 @@ strong {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 220px;
   gap: 12px;
-  margin-bottom: 14px;
+}
+
+.detail-scroll-shell {
+  display: grid;
+  align-content: start;
+  gap: 14px;
+  min-height: 0;
+  overflow: auto;
+  padding-right: 4px;
 }
 
 .session-filters input,
@@ -485,10 +497,8 @@ strong {
   align-content: start;
   gap: 14px;
   list-style: none;
-  margin: 8px 0 0;
+  margin: 0;
   padding: 0;
-  overflow: auto;
-  min-height: 0;
 }
 
 .event-item {
@@ -590,6 +600,9 @@ strong {
 .composer-panel {
   display: grid;
   gap: 16px;
+  position: sticky;
+  bottom: 0;
+  z-index: 1;
 }
 
 .panel-header p {
