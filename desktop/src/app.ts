@@ -693,7 +693,12 @@ export function startApp(dom: AppDom) {
       await tauriApi.listen<AgentEvent>("agent-event", async (event) => {
         const existing = sessions.get(event.payload.session_id);
         if (existing) {
-          sessions.set(existing.id, applyAgentEvent(existing, event.payload));
+          sessions.set(
+            existing.id,
+            applyAgentEvent(existing, event.payload, {
+              hydrateEvents: existing.id === selectedSessionId,
+            }),
+          );
         } else {
           const summary = await tauriApi!.invoke<SessionListItem | null>("get_session", {
             request: { session_id: event.payload.session_id },

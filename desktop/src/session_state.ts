@@ -84,6 +84,10 @@ export type SessionFilter = {
   kind: Kind | "all";
 };
 
+export type ApplyAgentEventOptions = {
+  hydrateEvents?: boolean;
+};
+
 export function createSessionState(record: SessionListItem): SessionState {
   return {
     id: record.session_id,
@@ -143,7 +147,11 @@ export function attachSessionEvents(session: SessionState, events: SessionEvent[
   };
 }
 
-export function applyAgentEvent(session: SessionState, event: AgentEvent): SessionState {
+export function applyAgentEvent(
+  session: SessionState,
+  event: AgentEvent,
+  options: ApplyAgentEventOptions = {},
+): SessionState {
   const nextEvent: SessionEvent = {
     session_id: event.session_id,
     run_id: event.run_id,
@@ -151,6 +159,7 @@ export function applyAgentEvent(session: SessionState, event: AgentEvent): Sessi
     kind: event.kind,
     message: event.message,
   };
+  const shouldAppendEvent = session.eventsLoaded || options.hydrateEvents === true;
 
   return {
     ...session,
@@ -160,7 +169,8 @@ export function applyAgentEvent(session: SessionState, event: AgentEvent): Sessi
     activeRunId: event.finished ? null : event.run_id,
     latestRunId: event.run_id,
     selectedRunId: event.run_id,
-    events: session.eventsLoaded ? [...session.events, nextEvent] : session.events,
+    events: shouldAppendEvent ? [...session.events, nextEvent] : session.events,
+    eventsLoaded: shouldAppendEvent,
     totalEvents: session.totalEvents + 1,
     commands: session.commands + (event.kind === "command" ? 1 : 0),
     warnings: session.warnings + (event.kind === "warning" || event.kind === "error" ? 1 : 0),

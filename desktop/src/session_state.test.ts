@@ -56,6 +56,29 @@ describe("session state", () => {
     expect(next.totalEvents).toBe(2);
   });
 
+  it("hydrates the selected session from live events before history is manually loaded", () => {
+    const session = createSessionState(summary());
+
+    const next = applyAgentEvent(
+      session,
+      {
+        session_id: "run-1",
+        run_id: "run-1-a1",
+        timestamp: "status",
+        kind: "status",
+        message: "thread started",
+        finished: false,
+        lifecycle: "running",
+      },
+      { hydrateEvents: true },
+    );
+
+    expect(next.eventsLoaded).toBe(true);
+    expect(next.events).toHaveLength(1);
+    expect(next.events[0]?.message).toBe("thread started");
+    expect(next.latestMessage).toBe("thread started");
+  });
+
   it("filters events by text and kind", () => {
     const session = attachSessionEvents(createSessionState(summary()), [
       { timestamp: "t1", kind: "command", message: "cargo test", sequence_no: 1 },
